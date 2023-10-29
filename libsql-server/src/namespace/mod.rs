@@ -33,7 +33,7 @@ use crate::connection::Connection;
 use crate::connection::MakeConnection;
 use crate::database::{Database, PrimaryDatabase, ReplicaDatabase};
 use crate::error::{Error, LoadDumpError};
-use crate::replication::primary::logger::{ReplicationLoggerHookCtx, REPLICATION_METHODS};
+use crate::replication::primary::logger::{MyArc, ReplicationLoggerHookCtx, REPLICATION_METHODS};
 use crate::replication::replica::Replicator;
 use crate::replication::{FrameNo, NamespacedSnapshotCallback, ReplicationLogger};
 use crate::stats::Stats;
@@ -524,7 +524,8 @@ pub struct Namespace<T: Database> {
     stats: Arc<Stats>,
     db_config_store: Arc<DatabaseConfigStore>,
     bottomless_replicator:
-        Option<Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
+        Option<MyArc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
+    ctx_builder: Option<ReplicationLoggerHookCtx>,
 }
 
 impl<T: Database> Namespace<T> {
@@ -550,9 +551,12 @@ impl<T: Database> Namespace<T> {
         self.tasks.shutdown().await;
         self.checkpoint().await?;
         self.db.shutdown();
+        if let Some(mut ctx_builder) = self.ctx_builder {
+            ctx_builder.shutdown();
+        }
         tracing::debug!("trying to acquire");
         if let Some(replicator_arc) = self.bottomless_replicator.take() {
-            let replicator = Arc::into_inner(replicator_arc)
+            let replicator = MyArc::into_inner(replicator_arc)
                 .expect("Failed to unwrap Arc")
                 .into_inner()
                 .expect("Failed to unwrap Mutex");
@@ -653,6 +657,7 @@ impl Namespace<ReplicaDatabase> {
             stats,
             db_config_store,
             bottomless_replicator: None,
+            ctx_builder: None,
         })
     }
 }
@@ -753,7 +758,7 @@ impl Namespace<PrimaryDatabase> {
             }
 
             is_dirty |= did_recover;
-            Some(Arc::new(std::sync::Mutex::new(Some(replicator))))
+            Some(MyArc::new(std::sync::Mutex::new(Some(replicator))))
         } else {
             None
         };
@@ -781,7 +786,9 @@ impl Namespace<PrimaryDatabase> {
 
         let ctx_builder = {
             let logger = logger.clone();
+            println!("cloning bottomless_replicator @ 784 (before ctx_builder)");
             let bottomless_replicator = bottomless_replicator.clone();
+            println!("cloning bottomless_replicator @ 786 (before ctx_builder)");
             move || ReplicationLoggerHookCtx::new(logger.clone(), bottomless_replicator.clone())
         };
 
@@ -823,7 +830,7 @@ impl Namespace<PrimaryDatabase> {
                 Err(LoadDumpError::LoadDumpExistingDb)?;
             }
             RestoreOption::Dump(dump) => {
-                load_dump(&db_path, dump, ctx_builder, logger.auto_checkpoint).await?;
+                load_dump(&db_path, dump, ctx_builder.clone(), logger.auto_checkpoint).await?;
             }
             _ => { /* other cases were already handled when creating bottomless */ }
         }
@@ -836,7 +843,7 @@ impl Namespace<PrimaryDatabase> {
                 checkpoint_interval,
             ));
         }
-
+        println!("cloning bottomless_replicator @ 840 (before return)");
         Ok(Self {
             tasks: join_set,
             db: PrimaryDatabase {
@@ -847,6 +854,7 @@ impl Namespace<PrimaryDatabase> {
             stats,
             db_config_store,
             bottomless_replicator: bottomless_replicator.clone(),
+            ctx_builder: Some(ctx_builder().clone()),
         })
     }
 }

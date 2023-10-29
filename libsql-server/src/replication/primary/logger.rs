@@ -2,8 +2,11 @@ use std::ffi::{c_int, c_void, CStr};
 use std::fs::{remove_dir_all, File, OpenOptions};
 use std::io::Write;
 use std::mem::size_of;
+use std::ops::Deref;
 use std::os::unix::prelude::FileExt;
+use std::panic::Location;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, ensure};
@@ -50,7 +53,7 @@ pub struct ReplicationLoggerHookCtx {
     buffer: Vec<WalPage>,
     logger: Arc<ReplicationLogger>,
     bottomless_replicator:
-        Option<Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
+        Option<MyArc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
 }
 
 /// This implementation of WalHook intercepts calls to `on_frame`, and writes them to a
@@ -117,7 +120,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
 
             // do backup after log replication as we don't want to replicate potentially
             // inconsistent frames
-            tracing::debug!("acquiring arc @ 121");
+            println!("acquiring arc @ 121");
             if let Some(replicator) = ctx.bottomless_replicator.as_mut() {
                 if let Some(replicator) = replicator.lock().unwrap().as_mut() {
                     replicator.register_last_valid_frame(last_valid_frame);
@@ -128,7 +131,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
                     replicator.submit_frames(frame_count as u32);
                 }
             }
-            tracing::debug!("releasing arc @ 121");
+            println!("releasing arc @ 121");
 
             if let Err(e) = ctx.logger.log_file.write().maybe_compact(
                 ctx.logger.compactor.clone(),
@@ -162,7 +165,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
 
         {
             let ctx = Self::wal_extract_ctx(wal);
-            tracing::debug!("acquiring arc @ 164");
+            println!("acquiring arc @ 164");
             if let Some(replicator) = ctx.bottomless_replicator.as_mut() {
                 let last_valid_frame = unsafe { *wal_data };
                 if let Some(replicator) = replicator.lock().unwrap().as_mut() {
@@ -173,7 +176,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
                     replicator.rollback_to_frame(last_valid_frame);
                 }
             }
-            tracing::debug!("releasing arc @ 164");
+            println!("releasing arc @ 164");
         }
 
         rc
@@ -219,7 +222,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
         {
             let ctx = Self::wal_extract_ctx(wal);
             let runtime = tokio::runtime::Handle::current();
-            tracing::debug!("acquiring arc @ 221");
+            println!("acquiring arc @ 221");
             if let Some(replicator) = ctx.bottomless_replicator.as_mut() {
                 if let Some(replicator) = replicator.lock().unwrap().as_mut() {
                     let last_known_frame = replicator.last_known_frame();
@@ -229,7 +232,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
                             "No committed changes in this generation, not snapshotting"
                         );
                         replicator.skip_snapshot_for_current_generation();
-                        tracing::debug!("releasing arc @ 221");
+                        println!("releasing arc @ 221");
                         return SQLITE_OK;
                     }
                     if let Err(e) =
@@ -276,7 +279,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
         {
             let ctx = Self::wal_extract_ctx(wal);
             let runtime = tokio::runtime::Handle::current();
-            tracing::debug!("acquiring arc @ 278");
+            println!("acquiring arc @ 278");
             if let Some(replicator) = ctx.bottomless_replicator.as_mut() {
                 if let Some(replicator) = replicator.lock().unwrap().as_mut() {
                     let _prev = replicator.new_generation();
@@ -290,7 +293,7 @@ unsafe impl WalHook for ReplicationLoggerHook {
                     }
                 }
             }
-            tracing::debug!("releasing arc @ 278");
+            println!("releasing arc @ 278");
         }
         SQLITE_OK
     }
@@ -304,11 +307,61 @@ pub struct WalPage {
     pub data: Bytes,
 }
 
+#[derive(Debug)]
+pub struct MyArc<T>(Arc<T>, usize);
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+impl<T> MyArc<T> {
+    #[track_caller]
+    pub fn new(value: T) -> Self {
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let location = Location::caller();
+        println!("<arc>Creating MyArc {id} at {:?}", location);
+        MyArc(Arc::new(value), id)
+    }
+}
+
+impl<T> Clone for MyArc<T> {
+    #[track_caller]
+    fn clone(&self) -> Self {
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        println!(
+            "<arc>Cloning MyArc {} to make MyArc {} at {:?}",
+            self.1,
+            id,
+            Location::caller()
+        );
+        MyArc(self.0.clone(), id)
+    }
+}
+
+impl<T> Deref for MyArc<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl<T> Drop for MyArc<T> {
+    fn drop(&mut self) {
+        println!("<arc>Dropping MyArc {}", self.1);
+    }
+}
+
+impl<T> MyArc<T> {
+    pub fn into_inner(self) -> Option<T> {
+        println!("into_inner of MyArc called");
+        None
+    }
+}
+
 impl ReplicationLoggerHookCtx {
     pub fn new(
         logger: Arc<ReplicationLogger>,
         bottomless_replicator: Option<
-            Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>,
+            MyArc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>,
         >,
     ) -> Self {
         if bottomless_replicator.is_some() {
@@ -355,6 +408,10 @@ impl ReplicationLoggerHookCtx {
 
     pub fn logger(&self) -> &ReplicationLogger {
         self.logger.as_ref()
+    }
+
+    pub fn shutdown(&mut self) {
+        self.bottomless_replicator = None;
     }
 }
 
