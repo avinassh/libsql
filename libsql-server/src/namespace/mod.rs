@@ -33,7 +33,7 @@ use crate::connection::Connection;
 use crate::connection::MakeConnection;
 use crate::database::{Database, PrimaryDatabase, ReplicaDatabase};
 use crate::error::{Error, LoadDumpError};
-use crate::replication::primary::logger::{MyArc, ReplicationLoggerHookCtx, REPLICATION_METHODS};
+use crate::replication::primary::logger::{ReplicationLoggerHookCtx, REPLICATION_METHODS};
 use crate::replication::replica::Replicator;
 use crate::replication::{FrameNo, NamespacedSnapshotCallback, ReplicationLogger};
 use crate::stats::Stats;
@@ -524,7 +524,7 @@ pub struct Namespace<T: Database> {
     stats: Arc<Stats>,
     db_config_store: Arc<DatabaseConfigStore>,
     bottomless_replicator:
-        Option<MyArc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
+        Option<Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
     ctx_builder: Option<ReplicationLoggerHookCtx>,
 }
 
@@ -552,11 +552,12 @@ impl<T: Database> Namespace<T> {
         self.checkpoint().await?;
         self.db.shutdown();
         if let Some(mut ctx_builder) = self.ctx_builder {
+            println!("shutting down ctx_builder");
             ctx_builder.shutdown();
         }
         tracing::debug!("trying to acquire");
         if let Some(replicator_arc) = self.bottomless_replicator.take() {
-            let replicator = MyArc::into_inner(replicator_arc)
+            let replicator = Arc::into_inner(replicator_arc)
                 .expect("Failed to unwrap Arc")
                 .into_inner()
                 .expect("Failed to unwrap Mutex");
@@ -758,7 +759,7 @@ impl Namespace<PrimaryDatabase> {
             }
 
             is_dirty |= did_recover;
-            Some(MyArc::new(std::sync::Mutex::new(Some(replicator))))
+            Some(Arc::new(std::sync::Mutex::new(Some(replicator))))
         } else {
             None
         };

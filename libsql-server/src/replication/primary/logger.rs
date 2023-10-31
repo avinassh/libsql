@@ -2,11 +2,8 @@ use std::ffi::{c_int, c_void, CStr};
 use std::fs::{remove_dir_all, File, OpenOptions};
 use std::io::Write;
 use std::mem::size_of;
-use std::ops::Deref;
 use std::os::unix::prelude::FileExt;
-use std::panic::Location;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, ensure};
@@ -53,7 +50,7 @@ pub struct ReplicationLoggerHookCtx {
     buffer: Vec<WalPage>,
     logger: Arc<ReplicationLogger>,
     bottomless_replicator:
-        Option<MyArc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
+        Option<Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
 }
 
 /// This implementation of WalHook intercepts calls to `on_frame`, and writes them to a
@@ -307,61 +304,11 @@ pub struct WalPage {
     pub data: Bytes,
 }
 
-#[derive(Debug)]
-pub struct MyArc<T>(Arc<T>, usize);
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-impl<T> MyArc<T> {
-    #[track_caller]
-    pub fn new(value: T) -> Self {
-        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let location = Location::caller();
-        println!("<arc>Creating MyArc {id} at {:?}", location);
-        MyArc(Arc::new(value), id)
-    }
-}
-
-impl<T> Clone for MyArc<T> {
-    #[track_caller]
-    fn clone(&self) -> Self {
-        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        println!(
-            "<arc>Cloning MyArc {} to make MyArc {} at {:?}",
-            self.1,
-            id,
-            Location::caller()
-        );
-        MyArc(self.0.clone(), id)
-    }
-}
-
-impl<T> Deref for MyArc<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &*self.0
-    }
-}
-
-impl<T> Drop for MyArc<T> {
-    fn drop(&mut self) {
-        println!("<arc>Dropping MyArc {}", self.1);
-    }
-}
-
-impl<T> MyArc<T> {
-    pub fn into_inner(self) -> Option<T> {
-        println!("into_inner of MyArc called");
-        None
-    }
-}
-
 impl ReplicationLoggerHookCtx {
     pub fn new(
         logger: Arc<ReplicationLogger>,
         bottomless_replicator: Option<
-            MyArc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>,
+            Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>,
         >,
     ) -> Self {
         if bottomless_replicator.is_some() {
