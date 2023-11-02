@@ -15,7 +15,7 @@ async fn main() {
 
     let db = Database::open_with_remote_sync(
         db_file.path().to_str().unwrap(),
-        "libsql://localhost:8080",
+        "http://localhost:8080",
         auth_token,
     )
     .await
@@ -23,7 +23,7 @@ async fn main() {
     let conn = db.connect().unwrap();
 
     let f = db.sync().await.unwrap();
-    println!("inital sync complete, frame no: {}", f);
+    println!("inital sync complete, frame no: {f:?}");
 
     conn.execute("CREATE TABLE IF NOT EXISTS foo (x TEXT)", ())
         .await
@@ -63,7 +63,7 @@ async fn main() {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
                 let r = db.sync().await.unwrap();
-                println!("{} frames have been applied", r);
+                println!("replicated until index {r:?}");
             }
 
             r = &mut jh => {

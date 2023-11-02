@@ -13,7 +13,7 @@ use tokio::time::{Duration, Instant};
 use crate::auth::{Authenticated, Authorized, Permission};
 use crate::error::Error;
 use crate::libsql_bindings::wal_hook::WalHook;
-use crate::metrics::{READ_QUERY_COUNT, WRITE_QUERY_COUNT};
+use crate::metrics::{READ_QUERY_COUNT, VACUUM_COUNT, WAL_CHECKPOINT_COUNT, WRITE_QUERY_COUNT};
 use crate::query::Query;
 use crate::query_analysis::{State, StmtKind};
 use crate::query_result_builder::{QueryBuilderConfig, QueryResultBuilder};
@@ -178,7 +178,13 @@ where
             | OpenFlags::SQLITE_OPEN_URI
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     );
-    sqld_libsql_bindings::Connection::open(path, flags, wal_methods, hook_ctx, auto_checkpoint)
+    sqld_libsql_bindings::Connection::open(
+        path.join("data"),
+        flags,
+        wal_methods,
+        hook_ctx,
+        auto_checkpoint,
+    )
 }
 
 impl<W> LibSqlConnection<W>
@@ -265,7 +271,10 @@ impl<T: WalHook> TxnSlot<T> {
         // we have a lock on the connection, we don't need mode than a
         // Relaxed store.
         conn.rollback();
-        histogram!("write_txn_duration", self.created_at.elapsed())
+        histogram!(
+            "libsql_server_write_txn_duration",
+            self.created_at.elapsed()
+        )
         // WRITE_TXN_DURATION.record(self.created_at.elapsed());
     }
 }
@@ -360,6 +369,17 @@ unsafe extern "C" fn busy_handler<W: WalHook>(state: *mut c_void, _retries: c_in
             }
         }
     })
+}
+
+fn value_size(val: &rusqlite::types::ValueRef) -> usize {
+    use rusqlite::types::ValueRef;
+    match val {
+        ValueRef::Null => 0,
+        ValueRef::Integer(_) => 8,
+        ValueRef::Real(_) => 8,
+        ValueRef::Text(s) => s.len(),
+        ValueRef::Blob(b) => b.len(),
+    }
 }
 
 impl<W: WalHook> Connection<W> {
@@ -548,7 +568,7 @@ impl<W: WalHook> Connection<W> {
         builder: &mut impl QueryResultBuilder,
     ) -> Result<(u64, Option<i64>)> {
         tracing::trace!("executing query: {}", query.stmt.stmt);
-
+        let start = Instant::now();
         let config = self.config_store.get();
         let blocked = match query.stmt.kind {
             StmtKind::Read | StmtKind::TxnBegin | StmtKind::Other => config.block_reads,
@@ -578,15 +598,18 @@ impl<W: WalHook> Connection<W> {
 
         let mut qresult = stmt.raw_query();
 
+        let mut values_total_bytes = 0;
         builder.begin_rows()?;
         while let Some(row) = qresult.next()? {
             builder.begin_row()?;
             for i in 0..cols_count {
                 let val = row.get_ref(i)?;
+                values_total_bytes += value_size(&val);
                 builder.add_row_value(val)?;
             }
             builder.finish_row()?;
         }
+        histogram!("libsql_server_returned_bytes", values_total_bytes as f64);
 
         builder.finish_rows()?;
 
@@ -606,7 +629,7 @@ impl<W: WalHook> Connection<W> {
 
         drop(qresult);
 
-        self.update_stats(query.stmt.stmt.clone(), &stmt);
+        self.update_stats(query.stmt.stmt.clone(), &stmt, Instant::now() - start);
 
         Ok((affected_row_count, last_insert_rowid))
     }
@@ -618,8 +641,11 @@ impl<W: WalHook> Connection<W> {
     }
 
     fn checkpoint(&self) -> Result<()> {
+        let start = Instant::now();
         self.conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", (), |_| Ok(()))?;
+        WAL_CHECKPOINT_COUNT.increment(1);
+        histogram!("libsql_server_wal_checkpoint_time", start.elapsed());
         Ok(())
     }
 
@@ -637,24 +663,44 @@ impl<W: WalHook> Connection<W> {
         } else {
             tracing::debug!("Not vacuuming: pages={page_count} freelist={freelist_count}");
         }
+        VACUUM_COUNT.increment(1);
         Ok(())
     }
 
-    fn update_stats(&self, sql: String, stmt: &rusqlite::Statement) {
-        let rows_read = stmt.get_status(StatementStatus::RowsRead);
-        let rows_written = stmt.get_status(StatementStatus::RowsWritten);
+    fn update_stats(&self, sql: String, stmt: &rusqlite::Statement, elapsed: Duration) {
+        histogram!("libsql_server_statement_execution_time", elapsed);
+        let elapsed = elapsed.as_millis() as u64;
+        let rows_read = stmt.get_status(StatementStatus::RowsRead) as u64;
+        let rows_written = stmt.get_status(StatementStatus::RowsWritten) as u64;
+        let mem_used = stmt.get_status(StatementStatus::MemUsed) as u64;
+        histogram!("libsql_server_statement_mem_used_bytes", mem_used as f64);
         let rows_read = if rows_read == 0 && rows_written == 0 {
             1
         } else {
             rows_read
         };
-        self.stats.inc_rows_read(rows_read as u64);
-        self.stats.inc_rows_written(rows_written as u64);
-        let weight = (rows_read + rows_written) as i64;
+        self.stats.inc_rows_read(rows_read);
+        self.stats.inc_rows_written(rows_written);
+        let weight = rows_read + rows_written;
         if self.stats.qualifies_as_top_query(weight) {
-            self.stats
-                .add_top_query(crate::stats::TopQuery::new(sql, rows_read, rows_written));
+            self.stats.add_top_query(crate::stats::TopQuery::new(
+                sql.clone(),
+                rows_read,
+                rows_written,
+            ));
         }
+        if self.stats.qualifies_as_slowest_query(elapsed) {
+            self.stats
+                .add_slowest_query(crate::stats::SlowestQuery::new(
+                    sql.clone(),
+                    elapsed,
+                    rows_read,
+                    rows_written,
+                ));
+        }
+
+        self.stats
+            .update_query_metrics(sql, rows_read, rows_written, mem_used, elapsed)
     }
 
     fn describe(&self, sql: &str) -> DescribeResult {

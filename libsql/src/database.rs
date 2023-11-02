@@ -7,9 +7,9 @@ cfg_core! {
         #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
         #[repr(C)]
         pub struct OpenFlags: ::std::os::raw::c_int {
-            const SQLITE_OPEN_READ_ONLY = libsql_sys::ffi::SQLITE_OPEN_READONLY as i32;
-            const SQLITE_OPEN_READ_WRITE = libsql_sys::ffi::SQLITE_OPEN_READWRITE as i32;
-            const SQLITE_OPEN_CREATE = libsql_sys::ffi::SQLITE_OPEN_CREATE as i32;
+            const SQLITE_OPEN_READ_ONLY = libsql_sys::ffi::SQLITE_OPEN_READONLY;
+            const SQLITE_OPEN_READ_WRITE = libsql_sys::ffi::SQLITE_OPEN_READWRITE;
+            const SQLITE_OPEN_CREATE = libsql_sys::ffi::SQLITE_OPEN_CREATE;
         }
     }
 
@@ -85,19 +85,20 @@ cfg_core! {
 
 cfg_replication! {
     use crate::Error;
+    use libsql_replication::frame::FrameNo;
+
 
     impl Database {
         /// Open a local database file with the ability to sync from snapshots from local filesystem.
-        #[cfg(feature = "replication")]
         pub async fn open_with_local_sync(db_path: impl Into<String>) -> Result<Database> {
-            let db = crate::local::Database::open_local_sync(db_path)?;
+            let db = crate::local::Database::open_local_sync(db_path, OpenFlags::default()).await?;
+
             Ok(Database {
                 db_type: DbType::Sync { db },
             })
         }
 
         /// Open a local database file with the ability to sync from a remote database.
-        #[cfg(feature = "replication")]
         pub async fn open_with_remote_sync(
             db_path: impl Into<String>,
             url: impl Into<String>,
@@ -107,11 +108,11 @@ cfg_replication! {
             http.enforce_http(false);
             http.set_nodelay(true);
 
-            Self::open_with_remote_sync_connector(db_path, url, token, http)
+            Self::open_with_remote_sync_connector(db_path, url, token, http).await
         }
 
         #[doc(hidden)]
-        pub fn open_with_remote_sync_connector<C>(
+        pub async fn open_with_remote_sync_connector<C>(
             db_path: impl Into<String>,
             url: impl Into<String>,
             token: impl Into<String>,
@@ -136,14 +137,17 @@ cfg_replication! {
                 db_path.into(),
                 url.into(),
                 token.into()
-            )?;
+            ).await?;
+
             Ok(Database {
                 db_type: DbType::Sync { db },
             })
         }
 
 
-        pub async fn sync(&self) -> Result<usize> {
+        /// Sync database from remote, and returns the commited frame_no after syncing, if
+        /// applicable.
+        pub async fn sync(&self) -> Result<Option<FrameNo>> {
             if let DbType::Sync { db } = &self.db_type {
                 db.sync().await
             } else {
@@ -151,9 +155,21 @@ cfg_replication! {
             }
         }
 
-        pub fn sync_frames(&self, frames: crate::replication::Frames) -> Result<usize> {
+        /// Apply a set of frames to the database and returns the commited frame_no after syncing, if
+        /// applicable.
+        pub async fn sync_frames(&self, frames: crate::replication::Frames) -> Result<Option<FrameNo>> {
             if let DbType::Sync { db } = &self.db_type {
-                db.sync_frames(frames)
+                db.sync_frames(frames).await
+            } else {
+                Err(Error::SyncNotSupported(format!("{:?}", self.db_type)))
+            }
+        }
+
+        /// Force buffered replication frames to be applied, and return the current commit frame_no
+        /// if applicable.
+        pub async fn flush_replicator(&self) -> Result<Option<FrameNo>> {
+            if let DbType::Sync { db } = &self.db_type {
+                db.flush_replicator().await
             } else {
                 Err(Error::SyncNotSupported(format!("{:?}", self.db_type)))
             }
@@ -234,10 +250,8 @@ impl Database {
                 let conn = db.connect()?;
 
                 let local = LibsqlConnection { conn };
-                let writer = local.conn.writer().unwrap().clone();
-
+                let writer = local.conn.writer().cloned();
                 let remote = crate::replication::RemoteConnection::new(local, writer);
-
                 let conn = std::sync::Arc::new(remote);
 
                 Ok(Connection { conn })

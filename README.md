@@ -15,7 +15,7 @@ libSQL is licensed under an [Open Source License](LICENSE.md), and we adhere to 
 ## Features
 
 * Embedded replicas that allow you to have replicated database inside your app.
-* [libSQL server](https://github.com/libsql/sqld) for remote SQLite access, similar to PostgreSQL or MySQL
+* [libSQL server](libsql-server) for remote SQLite access, similar to PostgreSQL or MySQL
 * Supports Rust, JavaScript, Python, Go, and more.
 
 There are also various improvements and extensions to the core SQLite:
@@ -43,13 +43,13 @@ To get started with the libSQL API:
 To build the SQLite-compatible C library and tools, run:
 
 ```sh
-./configure && make
+cargo xtask build
 ```
 
 To run the SQL shell, launch the `libsql` program:
 
 ```console
-$ ./libsql
+$ cd libsql-sqlite3 && ./libsql
 libSQL version 0.2.1 (based on SQLite version 3.43.0) 2023-05-23 11:47:56
 Enter ".help" for usage hints.
 Connected to a transient in-memory database.
