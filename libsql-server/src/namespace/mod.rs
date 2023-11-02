@@ -783,6 +783,7 @@ impl Namespace<PrimaryDatabase> {
                 let cb = config.snapshot_callback.clone();
                 move |path: &Path| cb(path, &name)
             }),
+            bottomless_replicator.clone(),
         )?);
 
         let ctx_builder = {

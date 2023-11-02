@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, ensure};
+use bottomless::replicator::Replicator;
 use bytemuck::{bytes_of, pod_read_unaligned, Pod, Zeroable};
 use bytes::{Bytes, BytesMut};
 use parking_lot::RwLock;
@@ -49,8 +50,7 @@ pub enum ReplicationLoggerHook {}
 pub struct ReplicationLoggerHookCtx {
     buffer: Vec<WalPage>,
     logger: Arc<ReplicationLogger>,
-    bottomless_replicator:
-        Option<Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
+    bottomless_replicator: Option<Arc<std::sync::Mutex<Option<Replicator>>>>,
 }
 
 /// This implementation of WalHook intercepts calls to `on_frame`, and writes them to a
@@ -783,6 +783,7 @@ pub struct ReplicationLogger {
     pub new_frame_notifier: watch::Sender<Option<FrameNo>>,
     pub closed_signal: watch::Sender<bool>,
     pub auto_checkpoint: u32,
+    pub bottomless_replicator: Option<Arc<std::sync::Mutex<Option<Replicator>>>>,
 }
 
 impl ReplicationLogger {
@@ -793,6 +794,7 @@ impl ReplicationLogger {
         dirty: bool,
         auto_checkpoint: u32,
         callback: SnapshotCallback,
+        bottomless_replicator: Option<Arc<std::sync::Mutex<Option<Replicator>>>>,
     ) -> anyhow::Result<Self> {
         let log_path = db_path.join("wallog");
         let data_path = db_path.join("data");
@@ -823,9 +825,21 @@ impl ReplicationLogger {
         };
 
         if should_recover {
-            Self::recover(log_file, data_path, callback, auto_checkpoint)
+            Self::recover(
+                log_file,
+                data_path,
+                callback,
+                auto_checkpoint,
+                bottomless_replicator,
+            )
         } else {
-            Self::from_log_file(db_path.to_path_buf(), log_file, callback, auto_checkpoint)
+            Self::from_log_file(
+                db_path.to_path_buf(),
+                log_file,
+                callback,
+                auto_checkpoint,
+                bottomless_replicator,
+            )
         }
     }
 
@@ -834,6 +848,7 @@ impl ReplicationLogger {
         log_file: LogFile,
         callback: SnapshotCallback,
         auto_checkpoint: u32,
+        bottomless_replicator: Option<Arc<std::sync::Mutex<Option<Replicator>>>>,
     ) -> anyhow::Result<Self> {
         let header = log_file.header();
         let generation_start_frame_no = header.last_frame_no();
@@ -863,6 +878,7 @@ impl ReplicationLogger {
             closed_signal,
             new_frame_notifier,
             auto_checkpoint,
+            bottomless_replicator,
         })
     }
 
@@ -871,6 +887,7 @@ impl ReplicationLogger {
         mut data_path: PathBuf,
         callback: SnapshotCallback,
         auto_checkpoint: u32,
+        bottomless_replicator: Option<Arc<std::sync::Mutex<Option<Replicator>>>>,
     ) -> anyhow::Result<Self> {
         // It is necessary to checkpoint before we restore the replication log, since the WAL may
         // contain pages that are not in the database file.
@@ -903,7 +920,13 @@ impl ReplicationLogger {
 
         assert!(data_path.pop());
 
-        Self::from_log_file(data_path, log_file, callback, auto_checkpoint)
+        Self::from_log_file(
+            data_path,
+            log_file,
+            callback,
+            auto_checkpoint,
+            bottomless_replicator,
+        )
     }
 
     pub fn database_id(&self) -> anyhow::Result<Uuid> {
@@ -1043,6 +1066,7 @@ mod test {
             false,
             DEFAULT_AUTO_CHECKPOINT,
             Box::new(|_| Ok(())),
+            None,
         )
         .unwrap();
 
@@ -1079,6 +1103,7 @@ mod test {
             false,
             DEFAULT_AUTO_CHECKPOINT,
             Box::new(|_| Ok(())),
+            None,
         )
         .unwrap();
         let log_file = logger.log_file.write();
@@ -1096,6 +1121,7 @@ mod test {
             false,
             DEFAULT_AUTO_CHECKPOINT,
             Box::new(|_| Ok(())),
+            None,
         )
         .unwrap();
         let entry = WalPage {
