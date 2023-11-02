@@ -523,9 +523,6 @@ pub struct Namespace<T: Database> {
     tasks: JoinSet<anyhow::Result<()>>,
     stats: Arc<Stats>,
     db_config_store: Arc<DatabaseConfigStore>,
-    bottomless_replicator:
-        Option<Arc<std::sync::Mutex<Option<bottomless::replicator::Replicator>>>>,
-    ctx_builder: Option<ReplicationLoggerHookCtx>,
 }
 
 impl<T: Database> Namespace<T> {
@@ -534,40 +531,22 @@ impl<T: Database> Namespace<T> {
     }
 
     async fn destroy(mut self) -> anyhow::Result<()> {
-        self.db.shutdown();
         self.tasks.shutdown().await;
+        self.db.destroy();
         Ok(())
     }
 
     async fn checkpoint(&self) -> anyhow::Result<()> {
         let conn = self.db.connection_maker().create().await?;
-        if let Err(e) = conn.vacuum_if_needed().await {
-            tracing::warn!("vacuum failed: {}", e);
-        }
+        conn.vacuum_if_needed().await?;
         conn.checkpoint().await?;
         Ok(())
     }
+
     async fn shutdown(mut self) -> anyhow::Result<()> {
         self.tasks.shutdown().await;
         self.checkpoint().await?;
-        self.db.shutdown();
-        if let Some(mut ctx_builder) = self.ctx_builder {
-            println!("shutting down ctx_builder");
-            ctx_builder.shutdown();
-        }
-        tracing::debug!("trying to acquire");
-        if let Some(replicator_arc) = self.bottomless_replicator.take() {
-            let replicator = Arc::into_inner(replicator_arc)
-                .expect("Failed to unwrap Arc")
-                .into_inner()
-                .expect("Failed to unwrap Mutex");
-            if let Some(mut replicator) = replicator {
-                replicator
-                    .wait_until_snapshotted()
-                    .await
-                    .expect("wait_until_snapshotted failed");
-            }
-        }
+        self.db.shutdown().await?;
         Ok(())
     }
 }
@@ -657,8 +636,6 @@ impl Namespace<ReplicaDatabase> {
             name,
             stats,
             db_config_store,
-            bottomless_replicator: None,
-            ctx_builder: None,
         })
     }
 }
@@ -855,8 +832,6 @@ impl Namespace<PrimaryDatabase> {
             name,
             stats,
             db_config_store,
-            bottomless_replicator: bottomless_replicator.clone(),
-            ctx_builder: Some(ctx_builder().clone()),
         })
     }
 }
