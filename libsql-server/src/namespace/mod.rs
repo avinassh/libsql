@@ -815,9 +815,7 @@ impl Namespace<PrimaryDatabase> {
 
         let ctx_builder = {
             let logger = logger.clone();
-            println!("cloning bottomless_replicator @ 784 (before ctx_builder)");
             let bottomless_replicator = bottomless_replicator.clone();
-            println!("cloning bottomless_replicator @ 786 (before ctx_builder)");
             move || ReplicationLoggerHookCtx::new(logger.clone(), bottomless_replicator.clone())
         };
 
@@ -872,7 +870,6 @@ impl Namespace<PrimaryDatabase> {
                 checkpoint_interval,
             ));
         }
-        println!("cloning bottomless_replicator @ 840 (before return)");
         Ok(Self {
             tasks: join_set,
             db: PrimaryDatabase {
