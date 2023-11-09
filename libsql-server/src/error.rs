@@ -82,13 +82,14 @@ pub enum Error {
     Fork(#[from] ForkError),
     #[error("Fatal replication error")]
     FatalReplicationError,
-
     #[error("Connection with primary broken")]
     PrimaryStreamDisconnect,
     #[error("Proxy protocal misuse")]
     PrimaryStreamMisuse,
     #[error("Proxy request interupted")]
     PrimaryStreamInterupted,
+    #[error("Namespace store has shutdown")]
+    NamespaceStoreShutdown,
 }
 
 trait ResponseError: std::error::Error {
@@ -145,6 +146,7 @@ impl IntoResponse for Error {
             PrimaryStreamDisconnect => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
             PrimaryStreamMisuse => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
             PrimaryStreamInterupted => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
+            NamespaceStoreShutdown => self.format_err(StatusCode::SERVICE_UNAVAILABLE),
         }
     }
 }
