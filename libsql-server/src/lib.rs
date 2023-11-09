@@ -1,6 +1,8 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
@@ -367,6 +369,7 @@ where
         let snapshot_callback = self.make_snapshot_callback();
         let auth = self.user_api_config.get_auth().map(Arc::new)?;
         let extensions = self.db_config.validate_extensions()?;
+        let namespace_store_shutdown_fut: Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
         match self.rpc_client_config {
             Some(rpc_config) => {
@@ -379,6 +382,11 @@ where
                     auth: auth.clone(),
                 };
                 let (namespaces, proxy_service, replication_service) = replica.configure().await?;
+                namespace_store_shutdown_fut = {
+                    let namespaces = namespaces.clone();
+                    Box::pin(async move { namespaces.shutdown().await })
+                };
+
                 let services = Services {
                     namespaces,
                     idle_shutdown_kicker,
@@ -410,6 +418,10 @@ where
                     auth: auth.clone(),
                 };
                 let (namespaces, proxy_service, replication_service) = primary.configure().await?;
+                namespace_store_shutdown_fut = {
+                    let namespaces = namespaces.clone();
+                    Box::pin(async move { namespaces.shutdown().await })
+                };
 
                 let services = Services {
                     namespaces,
@@ -432,6 +444,7 @@ where
         tokio::select! {
             _ = self.shutdown.notified() => {
                 join_set.shutdown().await;
+                namespace_store_shutdown_fut.await?;
                 // clean shutdown, remove sentinel file
                 std::fs::remove_file(sentinel_file_path(&self.path))?;
             }

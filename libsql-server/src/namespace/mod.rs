@@ -22,12 +22,14 @@ use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant};
 use tokio_util::io::StreamReader;
 use tonic::transport::Channel;
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::auth::Authenticated;
 use crate::connection::config::DatabaseConfigStore;
 use crate::connection::libsql::{open_conn, MakeLibSqlConn};
 use crate::connection::write_proxy::MakeWriteProxyConn;
+use crate::connection::Connection;
 use crate::connection::MakeConnection;
 use crate::database::{Database, PrimaryDatabase, ReplicaDatabase};
 use crate::error::{Error, LoadDumpError};
@@ -281,6 +283,7 @@ struct NamespaceStoreInner<M: MakeNamespace> {
     /// The namespace factory, to create new namespaces.
     make_namespace: M,
     allow_lazy_creation: bool,
+    has_shutdown: RwLock<bool>,
 }
 
 impl<M: MakeNamespace> NamespaceStore<M> {
@@ -290,11 +293,15 @@ impl<M: MakeNamespace> NamespaceStore<M> {
                 store: Default::default(),
                 make_namespace,
                 allow_lazy_creation,
+                has_shutdown: RwLock::new(false),
             }),
         }
     }
 
     pub async fn destroy(&self, namespace: NamespaceName) -> crate::Result<()> {
+        if *self.inner.has_shutdown.read().await {
+            return Err(Error::NamespaceStoreShutdown);
+        }
         let mut lock = self.inner.store.write().await;
         if let Some(ns) = lock.remove(&namespace) {
             // FIXME: when destroying, we are waiting for all the tasks associated with the
@@ -320,7 +327,10 @@ impl<M: MakeNamespace> NamespaceStore<M> {
         &self,
         namespace: NamespaceName,
         restore_option: RestoreOption,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
+        if *self.inner.has_shutdown.read().await {
+            return Err(Error::NamespaceStoreShutdown);
+        }
         let mut lock = self.inner.store.write().await;
         if let Some(ns) = lock.remove(&namespace) {
             // FIXME: when destroying, we are waiting for all the tasks associated with the
@@ -379,6 +389,9 @@ impl<M: MakeNamespace> NamespaceStore<M> {
         to: NamespaceName,
         timestamp: Option<NaiveDateTime>,
     ) -> crate::Result<()> {
+        if *self.inner.has_shutdown.read().await {
+            return Err(Error::NamespaceStoreShutdown);
+        }
         let mut lock = self.inner.store.write().await;
         if lock.contains_key(&to) {
             return Err(crate::error::Error::NamespaceAlreadyExist(
@@ -424,6 +437,9 @@ impl<M: MakeNamespace> NamespaceStore<M> {
     where
         Fun: FnOnce(&Namespace<M::Database>) -> R,
     {
+        if *self.inner.has_shutdown.read().await {
+            return Err(Error::NamespaceStoreShutdown);
+        }
         if !auth.is_namespace_authorized(&namespace) {
             return Err(Error::NamespaceDoesntExist(namespace.to_string()));
         }
@@ -435,6 +451,9 @@ impl<M: MakeNamespace> NamespaceStore<M> {
     where
         Fun: FnOnce(&Namespace<M::Database>) -> R,
     {
+        if *self.inner.has_shutdown.read().await {
+            return Err(Error::NamespaceStoreShutdown);
+        }
         let before_load = Instant::now();
         let lock = self.inner.store.upgradable_read().await;
         if let Some(ns) = lock.get(&namespace) {
@@ -466,6 +485,9 @@ impl<M: MakeNamespace> NamespaceStore<M> {
         namespace: NamespaceName,
         restore_option: RestoreOption,
     ) -> crate::Result<()> {
+        if *self.inner.has_shutdown.read().await {
+            return Err(Error::NamespaceStoreShutdown);
+        }
         let lock = self.inner.store.upgradable_read().await;
         if lock.contains_key(&namespace) {
             return Err(crate::error::Error::NamespaceAlreadyExist(
@@ -488,6 +510,17 @@ impl<M: MakeNamespace> NamespaceStore<M> {
         tracing::info!("loaded namespace: `{namespace}`");
         lock.insert(namespace, ns);
 
+        Ok(())
+    }
+
+    pub async fn shutdown(self) -> crate::Result<()> {
+        let mut has_shutdown = self.inner.has_shutdown.write().await;
+        *has_shutdown = true;
+        let mut lock = self.inner.store.write().await;
+        for (name, ns) in lock.drain() {
+            ns.shutdown().await?;
+            trace!("shutdown namespace: `{}`", name);
+        }
         Ok(())
     }
 
@@ -520,9 +553,22 @@ impl<T: Database> Namespace<T> {
     }
 
     async fn destroy(mut self) -> anyhow::Result<()> {
-        self.db.shutdown();
         self.tasks.shutdown().await;
+        self.db.destroy();
+        Ok(())
+    }
 
+    async fn checkpoint(&self) -> anyhow::Result<()> {
+        let conn = self.db.connection_maker().create().await?;
+        conn.vacuum_if_needed().await?;
+        conn.checkpoint().await?;
+        Ok(())
+    }
+
+    async fn shutdown(mut self) -> anyhow::Result<()> {
+        self.tasks.shutdown().await;
+        self.checkpoint().await?;
+        self.db.shutdown().await?;
         Ok(())
     }
 }
@@ -763,7 +809,7 @@ impl Namespace<PrimaryDatabase> {
             }
 
             is_dirty |= did_recover;
-            Some(Arc::new(std::sync::Mutex::new(replicator)))
+            Some(Arc::new(std::sync::Mutex::new(Some(replicator))))
         } else {
             None
         };
@@ -787,6 +833,7 @@ impl Namespace<PrimaryDatabase> {
                 let cb = config.snapshot_callback.clone();
                 move |path: &Path| cb(path, &name)
             }),
+            bottomless_replicator.clone(),
         )?);
 
         let ctx_builder = {
