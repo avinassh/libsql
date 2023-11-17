@@ -2,6 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use anyhow::Context as _;
@@ -350,7 +351,7 @@ struct NamespaceStoreInner<M: MakeNamespace> {
     /// The namespace factory, to create new namespaces.
     make_namespace: M,
     allow_lazy_creation: bool,
-    has_shutdown: RwLock<bool>,
+    has_shutdown: AtomicBool,
 }
 
 impl<M: MakeNamespace> NamespaceStore<M> {
@@ -360,13 +361,16 @@ impl<M: MakeNamespace> NamespaceStore<M> {
                 store: Default::default(),
                 make_namespace,
                 allow_lazy_creation,
-                has_shutdown: RwLock::new(false),
+                has_shutdown: AtomicBool::new(false),
             }),
         }
     }
 
     pub async fn destroy(&self, namespace: NamespaceName) -> crate::Result<()> {
-        if *self.inner.has_shutdown.read().await {
+        // if *self.inner.has_shutdown.read().await {
+        //     return Err(Error::NamespaceStoreShutdown);
+        // }
+        if self.inner.has_shutdown.load(Ordering::Relaxed) {
             return Err(Error::NamespaceStoreShutdown);
         }
         let mut lock = self.inner.store.write().await;
@@ -399,7 +403,7 @@ impl<M: MakeNamespace> NamespaceStore<M> {
         namespace: NamespaceName,
         restore_option: RestoreOption,
     ) -> crate::Result<()> {
-        if *self.inner.has_shutdown.read().await {
+        if self.inner.has_shutdown.load(Ordering::Relaxed) {
             return Err(Error::NamespaceStoreShutdown);
         }
         let mut lock = self.inner.store.write().await;
@@ -466,7 +470,7 @@ impl<M: MakeNamespace> NamespaceStore<M> {
         to: NamespaceName,
         timestamp: Option<NaiveDateTime>,
     ) -> crate::Result<()> {
-        if *self.inner.has_shutdown.read().await {
+        if self.inner.has_shutdown.load(Ordering::Relaxed) {
             return Err(Error::NamespaceStoreShutdown);
         }
         let mut lock = self.inner.store.write().await;
@@ -515,7 +519,7 @@ impl<M: MakeNamespace> NamespaceStore<M> {
     where
         Fun: FnOnce(&Namespace<M::Database>) -> R,
     {
-        if *self.inner.has_shutdown.read().await {
+        if self.inner.has_shutdown.load(Ordering::Relaxed) {
             return Err(Error::NamespaceStoreShutdown);
         }
         if !auth.is_namespace_authorized(&namespace) {
@@ -529,7 +533,7 @@ impl<M: MakeNamespace> NamespaceStore<M> {
     where
         Fun: FnOnce(&Namespace<M::Database>) -> R,
     {
-        if *self.inner.has_shutdown.read().await {
+        if self.inner.has_shutdown.load(Ordering::Relaxed) {
             return Err(Error::NamespaceStoreShutdown);
         }
         let before_load = Instant::now();
@@ -565,7 +569,7 @@ impl<M: MakeNamespace> NamespaceStore<M> {
         restore_option: RestoreOption,
         bottomless_db_id: NamespaceBottomlessDbId,
     ) -> crate::Result<()> {
-        if *self.inner.has_shutdown.read().await {
+        if self.inner.has_shutdown.load(Ordering::Relaxed) {
             return Err(Error::NamespaceStoreShutdown);
         }
         let lock = self.inner.store.upgradable_read().await;
@@ -595,8 +599,7 @@ impl<M: MakeNamespace> NamespaceStore<M> {
     }
 
     pub async fn shutdown(self) -> crate::Result<()> {
-        let mut has_shutdown = self.inner.has_shutdown.write().await;
-        *has_shutdown = true;
+        self.inner.has_shutdown.store(true, Ordering::Relaxed);
         let mut lock = self.inner.store.write().await;
         for (name, ns) in lock.drain() {
             ns.shutdown().await?;
