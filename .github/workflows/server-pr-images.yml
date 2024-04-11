@@ -15,8 +15,17 @@ env:
 jobs:
   # docker image build and upload to ghcr
   build-and-push-image:
-    # run this job only if the pull request is from the same repository
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.body && contains(github.event.pull_request.body, '+build')
+    # run this job if either:
+    # 1. The pull request is from the same repository and contains '+build' in the body
+    # 2. The workflow is manually triggered (workflow_dispatch event)
+    if: >
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.body &&
+        contains(github.event.pull_request.body, '+build')
+      ) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
