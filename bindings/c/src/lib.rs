@@ -49,6 +49,8 @@ pub unsafe extern "C" fn libsql_open_sync(
     db_path: *const std::ffi::c_char,
     primary_url: *const std::ffi::c_char,
     auth_token: *const std::ffi::c_char,
+    read_your_writes: std::ffi::c_char,
+    encryption_key: *const std::ffi::c_char,
     out_db: *mut libsql_database_t,
     out_err_msg: *mut *const std::ffi::c_char,
 ) -> std::ffi::c_int {
@@ -76,14 +78,28 @@ pub unsafe extern "C" fn libsql_open_sync(
             return 3;
         }
     };
-    match RT.block_on(
-        libsql::Builder::new_remote_replica(
-            db_path,
-            primary_url.to_string(),
-            auth_token.to_string(),
-        )
-        .build(),
-    ) {
+    let builder = libsql::Builder::new_remote_replica(
+        db_path,
+        primary_url.to_string(),
+        auth_token.to_string(),
+    );
+    let builder = builder.read_your_writes(read_your_writes != 0);
+    let builder = if encryption_key.is_null() {
+        builder
+    } else {
+        let key = unsafe { std::ffi::CStr::from_ptr(encryption_key) };
+        let key = match key.to_str() {
+            Ok(k) => k,
+            Err(e) => {
+                set_err_msg(format!("Wrong encryption key: {e}"), out_err_msg);
+                return 4;
+            }
+        };
+        let key = bytes::Bytes::copy_from_slice(key.as_bytes());
+        let config = libsql::EncryptionConfig::new(libsql::Cipher::Aes256Cbc, key);
+        builder.encryption_config(config)
+    };
+    match RT.block_on(builder.build()) {
         Ok(db) => {
             let db = Box::leak(Box::new(libsql_database { db }));
             *out_db = libsql_database_t::from(db);
@@ -94,7 +110,7 @@ pub unsafe extern "C" fn libsql_open_sync(
                 format!("Error opening db path {db_path}, primary url {primary_url}: {e}"),
                 out_err_msg,
             );
-            1
+            5
         }
     }
 }
@@ -197,6 +213,20 @@ pub unsafe extern "C" fn libsql_connect(
     };
     let conn = Box::leak(Box::new(libsql_connection { conn }));
     *out_conn = libsql_connection_t::from(conn);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn libsql_reset(
+    conn: libsql_connection_t,
+    out_err_msg: *mut *const std::ffi::c_char,
+) -> std::ffi::c_int {
+    if conn.is_null() {
+        set_err_msg("Null connection".to_string(), out_err_msg);
+        return 1;
+    }
+    let conn = conn.get_ref();
+    RT.block_on(conn.reset());
     0
 }
 
@@ -377,7 +407,7 @@ pub unsafe extern "C" fn libsql_bind_blob(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn libsql_execute_stmt(
+pub unsafe extern "C" fn libsql_query_stmt(
     stmt: libsql_stmt_t,
     out_rows: *mut libsql_rows_t,
     out_err_msg: *mut *const std::ffi::c_char,
@@ -401,6 +431,25 @@ pub unsafe extern "C" fn libsql_execute_stmt(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn libsql_execute_stmt(
+    stmt: libsql_stmt_t,
+    out_err_msg: *mut *const std::ffi::c_char,
+) -> std::ffi::c_int {
+    if stmt.is_null() {
+        set_err_msg("Null statement".to_string(), out_err_msg);
+        return 1;
+    }
+    let stmt = stmt.get_ref_mut();
+    match RT.block_on(stmt.stmt.execute(stmt.params.clone())) {
+        Ok(_) => 0,
+        Err(e) => {
+            set_err_msg(format!("Error executing statement: {}", e), out_err_msg);
+            2
+        }
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn libsql_free_stmt(stmt: libsql_stmt_t) {
     if stmt.is_null() {
         return;
@@ -409,7 +458,7 @@ pub unsafe extern "C" fn libsql_free_stmt(stmt: libsql_stmt_t) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn libsql_execute(
+pub unsafe extern "C" fn libsql_query(
     conn: libsql_connection_t,
     sql: *const std::ffi::c_char,
     out_rows: *mut libsql_rows_t,
@@ -435,6 +484,30 @@ pub unsafe extern "C" fn libsql_execute(
         }
     };
     0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn libsql_execute(
+    conn: libsql_connection_t,
+    sql: *const std::ffi::c_char,
+    out_err_msg: *mut *const std::ffi::c_char,
+) -> std::ffi::c_int {
+    let sql = unsafe { std::ffi::CStr::from_ptr(sql) };
+    let sql = match sql.to_str() {
+        Ok(sql) => sql,
+        Err(e) => {
+            set_err_msg(format!("Wrong SQL: {}", e), out_err_msg);
+            return 1;
+        }
+    };
+    let conn = conn.get_ref();
+    match RT.block_on(conn.execute(sql, ())) {
+        Ok(_) => 0,
+        Err(e) => {
+            set_err_msg(format!("Error executing statement: {}", e), out_err_msg);
+            2
+        }
+    }
 }
 
 #[no_mangle]

@@ -41,6 +41,8 @@ int libsql_sync(libsql_database_t db, const char **out_err_msg);
 int libsql_open_sync(const char *db_path,
                      const char *primary_url,
                      const char *auth_token,
+                     char read_your_writes,
+                     const char *encryption_key,
                      libsql_database_t *out_db,
                      const char **out_err_msg);
 
@@ -53,6 +55,8 @@ int libsql_open_remote(const char *url, const char *auth_token, libsql_database_
 void libsql_close(libsql_database_t db);
 
 int libsql_connect(libsql_database_t db, libsql_connection_t *out_conn, const char **out_err_msg);
+
+int libsql_reset(libsql_connection_t conn, const char **out_err_msg);
 
 void libsql_disconnect(libsql_connection_t conn);
 
@@ -68,11 +72,15 @@ int libsql_bind_string(libsql_stmt_t stmt, int idx, const char *value, const cha
 
 int libsql_bind_blob(libsql_stmt_t stmt, int idx, const unsigned char *value, int value_len, const char **out_err_msg);
 
-int libsql_execute_stmt(libsql_stmt_t stmt, libsql_rows_t *out_rows, const char **out_err_msg);
+int libsql_query_stmt(libsql_stmt_t stmt, libsql_rows_t *out_rows, const char **out_err_msg);
+
+int libsql_execute_stmt(libsql_stmt_t stmt, const char **out_err_msg);
 
 void libsql_free_stmt(libsql_stmt_t stmt);
 
-int libsql_execute(libsql_connection_t conn, const char *sql, libsql_rows_t *out_rows, const char **out_err_msg);
+int libsql_query(libsql_connection_t conn, const char *sql, libsql_rows_t *out_rows, const char **out_err_msg);
+
+int libsql_execute(libsql_connection_t conn, const char *sql, const char **out_err_msg);
 
 void libsql_free_rows(libsql_rows_t res);
 

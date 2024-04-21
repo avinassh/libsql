@@ -520,6 +520,7 @@ impl SnapshotBuilder {
                     self.header.start_frame_no.into(),
                     self.header.end_frame_no.into(),
                     file.file_path(),
+                    Uuid::from_u128(self.header.log_id.get()),
                 )
                 .await?;
         }
@@ -596,7 +597,7 @@ mod test {
     #[tokio::test]
     async fn process_pending_logs_on_startup() {
         let tmp = tempdir().unwrap();
-        let log_id = Uuid::new_v4();
+        let log_id = Uuid::now_v7();
         let to_compact_path = tmp.path().join("to_compact");
         tokio::fs::create_dir_all(&to_compact_path).await.unwrap();
         let mut current_fno = 0;
@@ -714,7 +715,7 @@ mod test {
     #[tokio::test]
     async fn compact_many() {
         let tmp = tempdir().unwrap();
-        let log_id = Uuid::new_v4();
+        let log_id = Uuid::now_v7();
         let to_compact_path = tmp.path().join("to_compact");
         tokio::fs::create_dir_all(&to_compact_path).await.unwrap();
         let mut current_fno = 0;

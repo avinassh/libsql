@@ -21,6 +21,8 @@ pub(crate) trait Conn {
     fn changes(&self) -> u64;
 
     fn last_insert_rowid(&self) -> i64;
+
+    async fn reset(&self);
 }
 
 /// A connection to some libsql database, this can be a remote one or a local one.
@@ -110,5 +112,9 @@ impl Connection {
     /// Check the last inserted row id.
     pub fn last_insert_rowid(&self) -> i64 {
         self.conn.last_insert_rowid()
+    }
+
+    pub async fn reset(&self) {
+        self.conn.reset().await
     }
 }

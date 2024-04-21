@@ -1,6 +1,8 @@
 use std::ffi::c_int;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use crate::completion_progress::SavepointTracker;
 use libsql_sys::ffi::{SQLITE_BUSY, SQLITE_IOERR_WRITE};
 use libsql_sys::wal::wrapper::{WalWrapper, WrapWal};
 use libsql_sys::wal::{
@@ -26,6 +28,14 @@ impl BottomlessWalWrapper {
         match &mut *lock {
             Some(replicator) => Ok(f(replicator)),
             None => Err(Error::new(SQLITE_IOERR_WRITE)),
+        }
+    }
+
+    pub fn backup_savepoint(&self) -> Option<SavepointTracker> {
+        let lock = self.replicator.lock().unwrap();
+        match &*lock {
+            None => None,
+            Some(replicator) => Some(replicator.savepoint()),
         }
     }
 
@@ -82,6 +92,7 @@ impl<T: Wal> WrapWal<T> for BottomlessWalWrapper {
         Ok(num_frames)
     }
 
+    #[tracing::instrument(skip_all, fields(in_wal = in_wal, backfilled = backfilled))]
     fn checkpoint(
         &mut self,
         wrapped: &mut T,
@@ -95,8 +106,9 @@ impl<T: Wal> WrapWal<T> for BottomlessWalWrapper {
         in_wal: Option<&mut i32>,
         backfilled: Option<&mut i32>,
     ) -> Result<()> {
+        let before = Instant::now();
         {
-            tracing::trace!("bottomless checkpoint");
+            tracing::trace!("bottomless checkpoint: {mode:?}");
 
             /* In order to avoid partial checkpoints, passive checkpoint
              ** mode is not allowed. Only TRUNCATE checkpoints are accepted,
@@ -134,6 +146,7 @@ impl<T: Wal> WrapWal<T> for BottomlessWalWrapper {
                     );
                     return Err(Error::new(SQLITE_IOERR_WRITE));
                 }
+                tracing::debug!("commited after {:?}", before.elapsed());
                 if let Err(e) = runtime.block_on(replicator.wait_until_snapshotted()) {
                     tracing::error!(
                         "Failed to wait for S3 replicator to confirm database snapshot backup: {}",
@@ -141,6 +154,7 @@ impl<T: Wal> WrapWal<T> for BottomlessWalWrapper {
                     );
                     return Err(Error::new(SQLITE_IOERR_WRITE));
                 }
+                tracing::debug!("snapshotted after {:?}", before.elapsed());
 
                 Ok(())
             })??;
@@ -157,15 +171,17 @@ impl<T: Wal> WrapWal<T> for BottomlessWalWrapper {
             backfilled,
         )?;
 
+        tracing::debug!("underlying checkpoint call after {:?}", before.elapsed());
+
         #[allow(clippy::await_holding_lock)]
         // uncontended -> only gets called under a libSQL write lock
         {
             let runtime = tokio::runtime::Handle::current();
             self.try_with_replicator(|replicator| {
-                let _prev = replicator.new_generation();
-                if let Err(e) =
-                    runtime.block_on(async move { replicator.snapshot_main_db_file().await })
-                {
+                if let Err(e) = runtime.block_on(async move {
+                    replicator.new_generation().await;
+                    replicator.snapshot_main_db_file(false).await
+                }) {
                     tracing::error!("Failed to snapshot the main db file during checkpoint: {e}");
                     return Err(Error::new(SQLITE_IOERR_WRITE));
                 }
@@ -173,6 +189,20 @@ impl<T: Wal> WrapWal<T> for BottomlessWalWrapper {
             })??;
         }
 
+        tracing::debug!("checkpoint finnished after {:?}", before.elapsed());
+
         Ok(())
+    }
+
+    fn close<M: libsql_sys::wal::WalManager<Wal = T>>(
+        &mut self,
+        manager: &M,
+        wrapped: &mut T,
+        db: &mut libsql_sys::wal::Sqlite3Db,
+        sync_flags: c_int,
+        _scratch: Option<&mut [u8]>,
+    ) -> libsql_sys::wal::Result<()> {
+        // prevent unmonitored checkpoints
+        manager.close(wrapped, db, sync_flags, None)
     }
 }

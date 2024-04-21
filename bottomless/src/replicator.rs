@@ -1,4 +1,5 @@
 use crate::backup::WalCopier;
+use crate::completion_progress::{CompletionProgress, SavepointTracker};
 use crate::read::BatchReader;
 use crate::uuid_utils::decode_unix_timestamp;
 use crate::wal::WalFileReader;
@@ -24,6 +25,7 @@ use std::sync::Arc;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch::{channel, Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
@@ -65,6 +67,9 @@ pub struct Replicator {
     max_frames_per_batch: usize,
     s3_upload_max_parallelism: usize,
     join_set: JoinSet<()>,
+    upload_progress: Arc<Mutex<CompletionProgress>>,
+    last_uploaded_frame_no: Receiver<u32>,
+    skip_snapshot: bool,
 }
 
 #[derive(Debug)]
@@ -109,6 +114,8 @@ pub struct Options {
     pub s3_upload_max_parallelism: usize,
     /// Max number of retries for S3 operations
     pub s3_max_retries: u32,
+    /// Skip snapshot upload per checkpoint.
+    pub skip_snapshot: bool,
 }
 
 impl Options {
@@ -198,6 +205,17 @@ impl Options {
                 other
             ),
         };
+        let skip_snapshot = match env_var_or("LIBSQL_BOTTOMLESS_SKIP_SNAPSHOT", false)
+            .to_lowercase()
+            .as_ref()
+        {
+            "yes" | "true" | "1" | "y" | "t" => true,
+            "no" | "false" | "0" | "n" | "f" => false,
+            other => bail!(
+                "Invalid LIBSQL_BOTTOMLESS_SKIP_SNAPSHOT environment variable: {}",
+                other
+            ),
+        };
         let s3_max_retries = env_var_or("LIBSQL_BOTTOMLESS_S3_MAX_RETRIES", 10).parse::<u32>()?;
         let cipher = match encryption_cipher {
             Some(cipher) => Cipher::from_str(&cipher)?,
@@ -222,6 +240,7 @@ impl Options {
             region,
             bucket_name,
             s3_max_retries,
+            skip_snapshot,
         })
     }
 }
@@ -317,27 +336,31 @@ impl Replicator {
             })
         };
 
+        let (upload_progress, last_uploaded_frame_no) = CompletionProgress::new(0);
+        let upload_progress = Arc::new(Mutex::new(upload_progress));
         let _s3_upload = {
             let client = client.clone();
             let bucket = options.bucket_name.clone();
             let max_parallelism = options.s3_upload_max_parallelism;
+            let upload_progress = upload_progress.clone();
             join_set.spawn(async move {
                 let sem = Arc::new(tokio::sync::Semaphore::new(max_parallelism));
                 let mut join_set = JoinSet::new();
-                while let Some(fdesc) = frames_inbox.recv().await {
-                    tracing::trace!("Received S3 upload request: {}", fdesc);
+                while let Some(req) = frames_inbox.recv().await {
+                    tracing::trace!("Received S3 upload request: {}", req.path);
                     let start = Instant::now();
                     let sem = sem.clone();
                     let permit = sem.acquire_owned().await.unwrap();
                     let client = client.clone();
                     let bucket = bucket.clone();
+                    let upload_progress = upload_progress.clone();
                     join_set.spawn(async move {
-                        let fpath = format!("{}/{}", bucket, fdesc);
+                        let fpath = format!("{}/{}", bucket, req.path);
                         let body = ByteStream::from_path(&fpath).await.unwrap();
                         if let Err(e) = client
                             .put_object()
                             .bucket(bucket)
-                            .key(fdesc)
+                            .key(req.path)
                             .body(body)
                             .send()
                             .await
@@ -347,6 +370,10 @@ impl Replicator {
                             tokio::fs::remove_file(&fpath).await.unwrap();
                             let elapsed = Instant::now() - start;
                             tracing::debug!("Uploaded to S3: {} in {:?}", fpath, elapsed);
+                        }
+                        if let Some(frames) = req.frames {
+                            let mut up = upload_progress.lock().await;
+                            up.update(*frames.start(), *frames.end());
                         }
                         drop(permit);
                     });
@@ -374,7 +401,10 @@ impl Replicator {
             encryption_config: options.encryption_config,
             max_frames_per_batch: options.max_frames_per_batch,
             s3_upload_max_parallelism: options.s3_upload_max_parallelism,
+            skip_snapshot: options.skip_snapshot,
             join_set,
+            upload_progress,
+            last_uploaded_frame_no,
         })
     }
 
@@ -457,6 +487,7 @@ impl Replicator {
                     Err(_) => true,
                 })
                 .await?;
+            tracing::debug!("done waiting");
             match res.deref() {
                 Ok(_) => Ok(true),
                 Err(e) => Err(anyhow!("Failed snapshot generation {}: {}", generation, e)),
@@ -464,6 +495,33 @@ impl Replicator {
         } else {
             Ok(false)
         }
+    }
+
+    async fn reset_wal_tracker(&self) {
+        let mut lock = self.upload_progress.lock().await;
+        lock.reset();
+    }
+
+    pub fn savepoint(&self) -> SavepointTracker {
+        tracing::debug!(
+            "calling for backup savepoint for `{}` on generation `{}`, frame no.: {}",
+            self.db_name,
+            match self.generation() {
+                Ok(gen) => gen.to_string(),
+                _ => "".to_string(),
+            },
+            self.next_frame_no() - 1
+        );
+        if let Some(tx) = &self.flush_trigger {
+            let _ = tx.send(());
+        }
+        SavepointTracker::new(
+            self.generation.clone(),
+            self.snapshot_waiter.clone(),
+            self.next_frame_no.clone(),
+            self.last_uploaded_frame_no.clone(),
+            self.db_path.clone(),
+        )
     }
 
     /// Waits until the commit for a given frame_no or higher was given.
@@ -556,7 +614,8 @@ impl Replicator {
     }
 
     // Starts a new generation for this replicator instance
-    pub fn new_generation(&mut self) -> Option<Uuid> {
+    pub async fn new_generation(&mut self) -> Option<Uuid> {
+        self.reset_wal_tracker().await;
         let curr = Self::generate_generation();
         let prev = self.set_generation(curr);
         if let Some(prev) = prev {
@@ -859,7 +918,13 @@ impl Replicator {
     // Sends the main database file to S3 - if -wal file is present, it's replicated
     // too - it means that the local file was detected to be newer than its remote
     // counterpart.
-    pub async fn snapshot_main_db_file(&mut self) -> Result<Option<JoinHandle<()>>> {
+    pub async fn snapshot_main_db_file(&mut self, force: bool) -> Result<Option<JoinHandle<()>>> {
+        if self.skip_snapshot && !force {
+            tracing::trace!("database snapshot skipped");
+            let _ = self.snapshot_notifier.send(Ok(self.generation().ok()));
+            return Ok(None);
+        }
+        tracing::debug!("snapshotting db file");
         if !self.main_db_exists_and_not_empty().await {
             let generation = self.generation()?;
             tracing::debug!(
@@ -1211,6 +1276,10 @@ impl Replicator {
         }
 
         db.shutdown().await?;
+        {
+            let mut guard = self.upload_progress.lock().await;
+            guard.update(1, last_frame);
+        }
 
         if applied_wal_frame {
             tracing::info!("WAL file has been applied onto database file in generation {}. Requesting snapshot.", generation);
@@ -1255,6 +1324,14 @@ impl Replicator {
                 );
                 match wal_pages.cmp(&last_consistent_frame) {
                     std::cmp::Ordering::Equal => {
+                        if local_counter == [0u8; 4] && wal_pages == 0 {
+                            if self.get_dependency(&generation).await?.is_some() {
+                                // empty generation and empty local state, but we have a dependency
+                                // to previous generation: restore required
+                                return Ok(None);
+                            }
+                        }
+
                         tracing::info!(
                             "Remote generation is up-to-date, reusing it in this session"
                         );
@@ -1486,6 +1563,9 @@ impl Replicator {
         };
 
         let (action, recovered) = self.restore_from(generation, timestamp).await?;
+
+        let _ = self.snapshot_notifier.send(Ok(Some(generation)));
+
         tracing::info!(
             "Restoring from generation {generation}: action={action:?}, recovered={recovered}"
         );
