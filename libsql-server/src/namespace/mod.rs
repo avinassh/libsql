@@ -50,6 +50,7 @@ use crate::{
 };
 
 pub use fork::ForkError;
+use libsql_storage::LockManager;
 
 use self::fork::{ForkTask, PointInTimeRestore};
 use self::meta_store::MetaStoreHandle;
@@ -347,7 +348,11 @@ impl Namespace {
         )
         .await?;
 
-        let wal_wrapper = make_replication_wal_wrapper(bottomless_replicator, logger.clone());
+        let wal_wrapper = make_replication_wal_wrapper(
+            bottomless_replicator,
+            logger.clone(),
+            ns_config.lock_manager.clone(),
+        );
         let connection_maker = MakeLibSqlConn::new(
             db_path.to_path_buf(),
             wal_wrapper.clone(),
@@ -736,6 +741,8 @@ pub struct NamespaceConfig {
     pub(crate) bottomless_replication: Option<bottomless::replicator::Options>,
     pub(crate) scripted_backup: Option<ScriptBackupManager>,
     pub(crate) migration_scheduler: SchedulerHandle,
+
+    pub(crate) lock_manager: Arc<std::sync::Mutex<LockManager>>,
 }
 
 pub type DumpStream =

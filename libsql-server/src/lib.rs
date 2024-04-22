@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use crate::connection::{Connection, MakeConnection};
 use crate::database::DatabaseKind;
@@ -52,6 +52,7 @@ pub mod rpc;
 pub mod version;
 
 pub use hrana::proto as hrana_proto;
+use libsql_storage::LockManager;
 
 mod database;
 mod error;
@@ -429,6 +430,7 @@ where
             channel: channel.clone(),
             uri: uri.clone(),
             migration_scheduler: scheduler_sender.into(),
+            lock_manager: Arc::new(Mutex::new(LockManager::new())),
         };
 
         let (metastore_conn_maker, meta_store_wal_manager) =

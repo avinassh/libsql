@@ -314,6 +314,7 @@ where
             move || -> crate::Result<_> {
                 let manager = ManagedConnectionWalWrapper::new(connection_manager);
                 let id = manager.id();
+                // let wal = libsql_storage::DurableWalManager;
                 let wal = Sqlite3WalManager::default().wrap(manager).wrap(wal_wrapper);
 
                 let conn = Connection::new(

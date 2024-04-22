@@ -169,18 +169,6 @@ impl Wal for DurableWal {
         Ok(())
     }
 
-    fn frame_page_no(&self, frame_no: std::num::NonZeroU32) -> Option<std::num::NonZeroU32> {
-        trace!("DurableWal::frame_page_no(frame_no: {:?})", frame_no);
-        let rt = tokio::runtime::Handle::current();
-        let frame_no = frame_no.get() as u64;
-        let req = rpc::FramePageNumReq { frame_no };
-        let mut binding = self.client.lock();
-        let resp = binding.frame_page_num(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
-        let page_no = resp.into_inner().page_no;
-        std::num::NonZeroU32::new(page_no as u32)
-    }
-
     fn db_size(&self) -> u32 {
         trace!("DurableWal::db_size() => {}", self.db_size);
         self.db_size
@@ -299,14 +287,6 @@ impl Wal for DurableWal {
         let count = resp.into_inner().count;
         trace!("DurableWal::frames_in_wal() = {}", count);
         count
-    }
-
-    fn backfilled(&self) -> u32 {
-        todo!()
-    }
-
-    fn db_file(&self) -> &libsql_sys::wal::Sqlite3File {
-        todo!()
     }
 }
 
