@@ -85,11 +85,18 @@ pub struct DurableWal {
     db_size: u32,
     name: String,
     lock_manager: Arc<Mutex<LockManager>>,
+    rt: tokio::runtime::Handle,
 }
 
 impl DurableWal {
     fn new(lock_manager: Arc<Mutex<LockManager>>) -> Self {
-        let rt = tokio::runtime::Handle::current();
+        let rt = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h,
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.handle().clone()
+            }
+        };
         // connect to external storage server
         // export LIBSQL_STORAGE_SERVER_ADDR=http://libsql-storage-server.internal:5002
         let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
@@ -111,6 +118,7 @@ impl DurableWal {
             db_size,
             name: uuid::Uuid::new_v4().to_string(),
             lock_manager,
+            rt,
         }
     }
 }
@@ -134,13 +142,12 @@ impl Wal for DurableWal {
         page_no: std::num::NonZeroU32,
     ) -> Result<Option<std::num::NonZeroU32>> {
         trace!("DurableWal::find_frame(page_no: {:?})", page_no);
-        let rt = tokio::runtime::Handle::current();
         let req = rpc::FindFrameReq {
             page_no: page_no.get() as u64,
         };
         let mut binding = self.client.lock();
         let resp = binding.find_frame(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
+        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         let frame_no = resp
             .into_inner()
             .frame_no
@@ -156,12 +163,11 @@ impl Wal for DurableWal {
             buffer.copy_from_slice(&frame);
             return Ok(());
         }
-        let rt = tokio::runtime::Handle::current();
         let frame_no = frame_no.get() as u64;
         let req = rpc::ReadFrameReq { frame_no };
         let mut binding = self.client.lock();
         let resp = binding.read_frame(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
+        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         let frame = resp.into_inner().frame.unwrap();
         buffer.copy_from_slice(&frame);
         self.page_frames
@@ -171,12 +177,11 @@ impl Wal for DurableWal {
 
     fn frame_page_no(&self, frame_no: std::num::NonZeroU32) -> Option<std::num::NonZeroU32> {
         trace!("DurableWal::frame_page_no(frame_no: {:?})", frame_no);
-        let rt = tokio::runtime::Handle::current();
         let frame_no = frame_no.get() as u64;
         let req = rpc::FramePageNumReq { frame_no };
         let mut binding = self.client.lock();
         let resp = binding.frame_page_num(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
+        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         let page_no = resp.into_inner().page_no;
         std::num::NonZeroU32::new(page_no as u32)
     }
@@ -236,7 +241,6 @@ impl Wal for DurableWal {
     ) -> Result<usize> {
         trace!("name = {}", self.name);
         trace!("DurableWal::insert_frames(page_size: {}, size_after: {}, is_commit: {}, sync_flags: {})", page_size, size_after, is_commit, sync_flags);
-        let rt = tokio::runtime::Handle::current();
         let frames = page_headers
             .iter()
             .map(|header| {
@@ -250,7 +254,7 @@ impl Wal for DurableWal {
         let req = rpc::InsertFramesReq { frames };
         let mut binding = self.client.lock();
         let resp = binding.insert_frames(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
+        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         self.db_size = size_after;
         Ok(resp.into_inner().num_frames as usize)
     }
@@ -291,11 +295,10 @@ impl Wal for DurableWal {
     }
 
     fn frames_in_wal(&self) -> u32 {
-        let rt = tokio::runtime::Handle::current();
         let req = rpc::FramesInWalReq {};
         let mut binding = self.client.lock();
         let resp = binding.frames_in_wal(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
+        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         let count = resp.into_inner().count;
         trace!("DurableWal::frames_in_wal() = {}", count);
         count
