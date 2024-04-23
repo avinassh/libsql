@@ -4,4 +4,5 @@ pub trait FrameStore {
     fn find_frame(&self, page_no: u64) -> Option<u64>;
     fn frame_page_no(&self, frame_no: u64) -> Option<u64>;
     fn frames_in_wal(&self) -> u64;
+    fn destroy(&mut self);
 }

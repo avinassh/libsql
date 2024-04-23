@@ -6,9 +6,9 @@ use bytes::Bytes;
 use clap::Parser;
 use libsql_storage::rpc::storage_server::{Storage, StorageServer};
 use libsql_storage::rpc::{
-    DbSizeReq, DbSizeResp, FindFrameReq, FindFrameResp, FramePageNumReq, FramePageNumResp,
-    FramesInWalReq, FramesInWalResp, InsertFramesReq, InsertFramesResp, ReadFrameReq,
-    ReadFrameResp,
+    DbSizeReq, DbSizeResp, DestroyReq, DestroyResp, FindFrameReq, FindFrameResp, FramePageNumReq,
+    FramePageNumResp, FramesInWalReq, FramesInWalResp, InsertFramesReq, InsertFramesResp,
+    ReadFrameReq, ReadFrameResp,
 };
 use libsql_storage_server::version::Version;
 use redis::{Client, Commands, RedisResult};
@@ -91,6 +91,12 @@ impl FrameStore for InMemFrameStore {
 
     fn frames_in_wal(&self) -> u64 {
         self.max_frame_no
+    }
+
+    fn destroy(&mut self) {
+        self.frames.clear();
+        self.pages.clear();
+        self.max_frame_no = 0;
     }
 }
 
@@ -202,6 +208,13 @@ impl FrameStore for RedisFrameStore {
             0
         })
     }
+
+    fn destroy(&mut self) {
+        // remove all the keys in redis
+        let mut con = self.client.get_connection().unwrap();
+        // send a FLUSHALL request
+        let _: () = redis::cmd("FLUSHALL").query(&mut con).unwrap();
+    }
 }
 
 struct Service {
@@ -270,6 +283,15 @@ impl Storage for Service {
             error!("read_frame() failed for frame_no={}", frame_no);
             Ok(Response::new(ReadFrameResp { frame: None }))
         }
+    }
+
+    async fn destroy(
+        &self,
+        request: tonic::Request<DestroyReq>,
+    ) -> Result<tonic::Response<DestroyResp>, tonic::Status> {
+        trace!("destroy()");
+        self.store.lock().unwrap().destroy();
+        Ok(Response::new(DestroyResp {}))
     }
 
     async fn db_size(
