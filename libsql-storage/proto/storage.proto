@@ -55,6 +55,10 @@ message FramePageNumResp {
   uint64 page_no = 1;
 }
 
+message DestroyReq {}
+
+message DestroyResp {}
+
 service Storage {
   rpc InsertFrames(InsertFramesReq) returns (InsertFramesResp) {}
   rpc FindFrame(FindFrameReq) returns (FindFrameResp) {}
@@ -62,4 +66,5 @@ service Storage {
   rpc DbSize(DbSizeReq) returns (DbSizeResp) {}
   rpc FramesInWAL(FramesInWALReq) returns (FramesInWALResp) {}
   rpc FramePageNum(FramePageNumReq) returns (FramePageNumResp) {}
+  rpc Destroy(DestroyReq) returns (DestroyResp) {}
 }

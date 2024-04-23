@@ -61,7 +61,14 @@ impl WalManager for DurableWalManager {
 
     fn destroy_log(&self, vfs: &mut Vfs, db_path: &std::ffi::CStr) -> Result<()> {
         trace!("DurableWalManager::destroy_log()");
-        // TODO: implement
+        let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
+            .unwrap_or("http://127.0.0.1:5002".to_string());
+        let client = StorageClient::connect(address);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut client = tokio::task::block_in_place(|| rt.block_on(client)).unwrap();
+        let req = rpc::DestroyReq {};
+        let resp = client.destroy(req);
+        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
         Ok(())
     }
 
