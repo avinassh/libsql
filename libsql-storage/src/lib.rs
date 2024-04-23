@@ -85,16 +85,18 @@ pub struct DurableWal {
     db_size: u32,
     name: String,
     lock_manager: Arc<Mutex<LockManager>>,
+    runtime: Option<tokio::runtime::Runtime>,
     rt: tokio::runtime::Handle,
 }
 
 impl DurableWal {
     fn new(lock_manager: Arc<Mutex<LockManager>>) -> Self {
-        let rt = match tokio::runtime::Handle::try_current() {
-            Ok(h) => h,
+        let (runtime, rt) = match tokio::runtime::Handle::try_current() {
+            Ok(h) => (None, h),
             Err(_) => {
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.handle().clone()
+                let handle = rt.handle().clone();
+                (Some(rt), handle)
             }
         };
         // connect to external storage server
@@ -118,6 +120,7 @@ impl DurableWal {
             db_size,
             name: uuid::Uuid::new_v4().to_string(),
             lock_manager,
+            runtime,
             rt,
         }
     }
