@@ -5,8 +5,10 @@ use fallible_iterator::FallibleIterator;
 use sqlite3_parser::ast::{Cmd, Expr, Id, PragmaBody, QualifiedName, Stmt};
 use sqlite3_parser::lexer::sql::{Parser, ParserError};
 
+use crate::namespace::NamespaceName;
+
 /// A group of statements to be executed together.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Statement {
     pub stmt: String,
     pub kind: StmtKind,
@@ -24,7 +26,7 @@ impl Default for Statement {
 }
 
 /// Classify statement in categories of interest.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum StmtKind {
     /// The beginning of a transaction
     TxnBegin,
@@ -34,10 +36,9 @@ pub enum StmtKind {
     Write,
     Savepoint,
     Release,
-    Attach,
+    Attach(NamespaceName),
     Detach,
     DDL,
-    Other,
 }
 
 fn is_temp(name: &QualifiedName) -> bool {
@@ -61,8 +62,8 @@ impl StmtKind {
     fn kind(cmd: &Cmd) -> Option<Self> {
         match cmd {
             Cmd::Explain(Stmt::Pragma(name, body)) => Self::pragma_kind(name, body.as_ref()),
-            Cmd::Explain(_) => Some(Self::Other),
-            Cmd::ExplainQueryPlan(_) => Some(Self::Other),
+            Cmd::Explain(_) => Some(Self::Read),
+            Cmd::ExplainQueryPlan(_) => Some(Self::Read),
             Cmd::Stmt(Stmt::Begin { .. }) => Some(Self::TxnBegin),
             Cmd::Stmt(
                 Stmt::Commit { .. }
@@ -124,7 +125,19 @@ impl StmtKind {
                 savepoint_name: Some(_),
                 ..
             }) => Some(Self::Release),
-            Cmd::Stmt(Stmt::Attach { .. }) => Some(Self::Attach),
+            Cmd::Stmt(Stmt::Attach {
+                expr: Expr::Id(Id(db_name)),
+                ..
+            }) => {
+                let db_name = db_name
+                    .strip_prefix('"')
+                    .unwrap_or(db_name)
+                    .strip_suffix('"')
+                    .unwrap_or(db_name);
+                Some(Self::Attach(
+                    NamespaceName::from_string(db_name.to_string()).ok()?,
+                ))
+            }
             Cmd::Stmt(Stmt::Detach(_)) => Some(Self::Detach),
             _ => None,
         }
@@ -140,6 +153,7 @@ impl StmtKind {
             // special case for `encoding` - it's effectively readonly for connections
             // that already created a database, which is always the case for sqld
             "encoding" => Some(Self::Read),
+            "schema_version" if body.is_none() => Some(Self::Read),
             // always ok to be served by primary
             "defer_foreign_keys" | "foreign_keys" | "foreign_key_list" | "foreign_key_check" | "collation_list"
             | "data_version" | "freelist_count" | "integrity_check" | "legacy_file_format"
@@ -167,7 +181,6 @@ impl StmtKind {
             | "read_uncommitted"
             | "recursive_triggers"
             | "reverse_unordered_selects"
-            | "schema_version"
             | "secure_delete"
             | "soft_heap_limit"
             | "synchronous"
@@ -209,6 +222,14 @@ impl StmtKind {
     pub fn is_release(&self) -> bool {
         matches!(self, Self::Release)
     }
+
+    /// Returns true if this statement is a transaction related statement
+    pub(crate) fn is_txn(&self) -> bool {
+        matches!(
+            self,
+            Self::TxnEnd | Self::TxnBegin | Self::Release | Self::Savepoint
+        )
+    }
 }
 
 fn to_ascii_lower(s: &str) -> Cow<str> {
@@ -231,13 +252,13 @@ pub enum TxnStatus {
 }
 
 impl TxnStatus {
-    pub fn step(&mut self, kind: StmtKind) {
+    pub fn step(&mut self, kind: &StmtKind) {
         *self = match (*self, kind) {
             (TxnStatus::Txn, StmtKind::TxnBegin) | (TxnStatus::Init, StmtKind::TxnEnd) => {
                 TxnStatus::Invalid
             }
             (TxnStatus::Txn, StmtKind::TxnEnd) => TxnStatus::Init,
-            (state, StmtKind::Other | StmtKind::Write | StmtKind::Read | StmtKind::DDL) => state,
+            (state, StmtKind::Write | StmtKind::Read | StmtKind::DDL) => state,
             (TxnStatus::Invalid, _) => TxnStatus::Invalid,
             (TxnStatus::Init, StmtKind::TxnBegin) => TxnStatus::Txn,
             _ => TxnStatus::Invalid,
@@ -267,6 +288,7 @@ impl Statement {
             stmt_count: u64,
             has_more_stmts: bool,
             c: Cmd,
+            stmt_orig: &str,
         ) -> Result<Statement> {
             let kind = StmtKind::kind(&c)
                 .ok_or_else(|| anyhow::anyhow!("unsupported statement: {original}"))?;
@@ -298,8 +320,9 @@ impl Statement {
                 }) => Some((expr.clone(), name.clone())),
                 _ => None,
             };
+
             Ok(Statement {
-                stmt: c.to_string(),
+                stmt: stmt_orig.to_string(),
                 kind,
                 is_iud,
                 is_insert,
@@ -311,16 +334,55 @@ impl Statement {
         // on the heap:
         // - https://github.com/gwenn/lemon-rs/issues/8
         // - https://github.com/gwenn/lemon-rs/pull/19
-        let mut parser = Box::new(Parser::new(s.as_bytes()).peekable());
+
+        let mut parser = Box::new(Parser::new(s.as_bytes()));
+        let parser_iter = fallible_iterator::from_fn(move || {
+            let offset = parser.offset();
+            match parser.next()? {
+                Some(cmd) => {
+                    let new_offset = parser.offset();
+                    Ok(Some((cmd, &s[offset..new_offset])))
+                }
+                None => Ok(None),
+            }
+        });
+        let mut parser = Some(parser_iter.peekable());
         let mut stmt_count = 0;
         std::iter::from_fn(move || {
+            // temporary macro to catch panic from the parser, until we fix it.
+            macro_rules! parse {
+                ($parser:expr, |$arg:ident| $b:block) => {{
+                    let Some(mut p) = $parser.take() else {
+                        return None;
+                    };
+                    match std::panic::catch_unwind(|| {
+                        let ret = {
+                            let $arg = &mut p;
+                            $b
+                        };
+                        (ret, p)
+                    }) {
+                        Ok((ret, parser)) => {
+                            $parser = Some(parser);
+                            ret
+                        }
+                        Err(_) => {
+                            return Some(Err(anyhow::anyhow!("unexpected parser error")));
+                        }
+                    }
+                }};
+            }
+
             stmt_count += 1;
-            match parser.next() {
-                Ok(Some(cmd)) => Some(parse_inner(
+            let next = parse!(parser, |p| { p.next() });
+
+            match next {
+                Ok(Some((cmd, stmt_orig))) => Some(parse_inner(
                     s,
                     stmt_count,
-                    parser.peek().map_or(true, |o| o.is_some()),
+                    parse!(parser, |p| { p.peek().map_or(true, |o| o.is_some()) }),
                     cmd,
+                    stmt_orig,
                 )),
                 Ok(None) => None,
                 Err(sqlite3_parser::lexer::sql::Error::ParserError(
@@ -352,7 +414,7 @@ pub fn predict_final_state<'a>(
     stmts: impl Iterator<Item = &'a Statement>,
 ) -> TxnStatus {
     for stmt in stmts {
-        state.step(stmt.kind);
+        state.step(&stmt.kind);
     }
     state
 }

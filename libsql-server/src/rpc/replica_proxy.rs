@@ -6,23 +6,22 @@ use libsql_replication::rpc::proxy::{
 use tokio_stream::StreamExt;
 use tonic::{transport::Channel, Request, Status};
 
-use crate::{
-    auth::{parsers::parse_grpc_auth_header, user_auth_strategies::UserAuthContext, Auth},
-    namespace::{NamespaceStore, ReplicaNamespaceMaker},
-};
+use crate::auth::parsers::parse_grpc_auth_header;
+use crate::auth::{Auth, Jwt};
+use crate::namespace::NamespaceStore;
 
 pub struct ReplicaProxyService {
     client: ProxyClient<Channel>,
     user_auth_strategy: Auth,
     disable_namespaces: bool,
-    namespaces: NamespaceStore<ReplicaNamespaceMaker>,
+    namespaces: NamespaceStore,
 }
 
 impl ReplicaProxyService {
     pub fn new(
         channel: Channel,
         uri: Uri,
-        namespaces: NamespaceStore<ReplicaNamespaceMaker>,
+        namespaces: NamespaceStore,
         user_auth_strategy: Auth,
         disable_namespaces: bool,
     ) -> Self {
@@ -38,45 +37,30 @@ impl ReplicaProxyService {
     async fn do_auth<T>(&self, req: &mut Request<T>) -> Result<(), Status> {
         let namespace = super::extract_namespace(self.disable_namespaces, req)?;
 
-        let namespace_jwt_key = self
+        // todo dupe #auth
+        let jwt_result = self
             .namespaces
             .with(namespace.clone(), |ns| ns.jwt_key())
             .await;
 
-        let user_credential = parse_grpc_auth_header(req.metadata());
+        let namespace_jwt_key = jwt_result.and_then(|s| s);
 
-        match namespace_jwt_key {
-            Ok(Ok(jwt_key)) => {
-                let authenticated = self.user_auth_strategy.authenticate(UserAuthContext {
-                    namespace,
-                    namespace_credential: jwt_key,
-                    user_credential,
-                })?;
-
-                authenticated.upgrade_grpc_request(req);
-                Ok(())
+        let auth_strategy = match namespace_jwt_key {
+            Ok(Some(key)) => Ok(Auth::new(Jwt::new(key))),
+            Ok(None) | Err(crate::error::Error::NamespaceDoesntExist(_)) => {
+                Ok(self.user_auth_strategy.clone())
             }
-            Err(e) => match e.as_ref() {
-                crate::error::Error::NamespaceDoesntExist(_) => {
-                    let authenticated = self.user_auth_strategy.authenticate(UserAuthContext {
-                        namespace,
-                        namespace_credential: None,
-                        user_credential,
-                    })?;
-
-                    authenticated.upgrade_grpc_request(req);
-                    Ok(())
-                }
-                _ => Err(Status::internal(format!(
-                    "Error fetching jwt key for a namespace: {}",
-                    e
-                ))),
-            },
-            Ok(Err(e)) => Err(Status::internal(format!(
-                "Error fetching jwt key for a namespace: {}",
+            Err(e) => Err(Status::internal(format!(
+                "Can't fetch jwt key for a namespace: {}",
                 e
             ))),
-        }
+        }?;
+
+        let auth_context = parse_grpc_auth_header(req.metadata());
+        auth_strategy
+            .authenticate(auth_context)?
+            .upgrade_grpc_request(req);
+        return Ok(());
     }
 }
 

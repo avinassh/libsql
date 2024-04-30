@@ -11,8 +11,8 @@ description = "Bottomless replication for libSQL"
 [dependencies]
 anyhow = "1.0.66"
 async-compression = { version = "0.4.4", features = ["tokio", "gzip", "zstd"] }
-aws-config = { version = "0.55" }
-aws-sdk-s3 = { version = "0.28" }
+aws-config = { version = "1" }
+aws-sdk-s3 = { version = "1" }
 bytes = "1"
 libsql-sys = { path = "../libsql-sys" }
 libsql_replication = { path = "../libsql-replication" }
@@ -25,6 +25,7 @@ chrono = "0.4.23"
 uuid = "1.4.1"
 rand = "0.8.5"
 futures-core = "0.3.29"
+serde = { version = "1.0.196", features = ["derive"] }
 
 [features]
 default = []

@@ -1,6 +1,7 @@
 use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Duration;
 
 use futures_core::future::BoxFuture;
 use futures_core::Stream;
@@ -20,8 +21,7 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::{Code, Status};
 
-use crate::auth::Authenticated;
-use crate::connection::Connection;
+use crate::connection::{Connection, RequestContext};
 use crate::error::Error;
 use crate::query_result_builder::{
     Column, QueryBuilderConfig, QueryResultBuilder, QueryResultBuilderError,
@@ -32,19 +32,19 @@ const MAX_RESPONSE_SIZE: usize = bytesize::ByteSize::kb(100).as_u64() as usize;
 
 pub fn make_proxy_stream<S, C>(
     conn: C,
-    auth: Authenticated,
+    ctx: RequestContext,
     request_stream: S,
 ) -> impl Stream<Item = Result<ExecResp, Status>>
 where
     S: Stream<Item = Result<ExecReq, Status>>,
     C: Connection,
 {
-    make_proxy_stream_inner(conn, auth, request_stream, MAX_RESPONSE_SIZE)
+    make_proxy_stream_inner(conn, ctx, request_stream, MAX_RESPONSE_SIZE)
 }
 
 fn make_proxy_stream_inner<S, C>(
     conn: C,
-    auth: Authenticated,
+    ctx: RequestContext,
     request_stream: S,
     max_program_resp_size: usize,
 ) -> impl Stream<Item = Result<ExecResp, Status>>
@@ -92,7 +92,7 @@ where
                                             break
                                         };
                                     let conn = conn.clone();
-                                    let auth = auth.clone();
+                                    let ctx = ctx.clone();
                                     let sender = snd.clone();
 
                                     let fut = async move {
@@ -104,19 +104,19 @@ where
                                             max_program_resp_size,
                                         };
 
-                                        let ret = conn.execute_program(pgm, auth, builder, None).await.map(|_| ());
+                                        let ret = conn.execute_program(pgm, ctx, builder, None).await.map(|_| ());
                                         (ret, request_id)
                                     };
 
                                     current_request_fut = Box::pin(fut);
                                 }
                                 Some(Request::Describe(StreamDescribeReq { stmt })) => {
-                                    let auth = auth.clone();
+                                    let ctx = ctx.clone();
                                     let sender = snd.clone();
                                     let conn = conn.clone();
                                     let fut = async move {
                                         let do_describe = || async move {
-                                            let ret = conn.describe(stmt, auth, None).await??;
+                                            let ret = conn.describe(stmt, ctx, None).await??;
                                             Ok(DescribeResp {
                                                 cols: ret.cols.into_iter().map(|c| DescribeCol { name: c.name, decltype: c.decltype }).collect(),
                                                 params: ret.params.into_iter().map(|p| DescribeParam { name: p.name }).collect(),
@@ -356,6 +356,8 @@ impl QueryResultBuilder for StreamResponseBuilder {
     }
 
     fn into_ret(self) -> Self::Ret {}
+
+    fn add_stats(&mut self, _rows_read: u64, _rows_written: u64, _duration: Duration) {}
 }
 
 #[cfg(test)]
@@ -364,9 +366,11 @@ pub mod test {
     use tempfile::tempdir;
     use tokio_stream::wrappers::ReceiverStream;
 
-    use crate::auth::{Authorized, Permission};
+    use crate::auth::Authenticated;
     use crate::connection::libsql::LibSqlConnection;
     use crate::connection::program::Program;
+    use crate::namespace::meta_store::{metastore_connection_maker, MetaStore};
+    use crate::namespace::NamespaceName;
     use crate::query_result_builder::test::{
         fsm_builder_driver, random_transition, TestBuilder, ValidateTraceBuilder,
     };
@@ -386,9 +390,17 @@ pub mod test {
     #[tokio::test]
     async fn invalid_request() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(1);
-        let stream = make_proxy_stream(conn, Authenticated::Anonymous, ReceiverStream::new(rcv));
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::Anonymous,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
+        let stream = make_proxy_stream(conn, ctx, ReceiverStream::new(rcv));
         pin!(stream);
 
         let req = ExecReq {
@@ -404,13 +416,17 @@ pub mod test {
     #[tokio::test]
     async fn request_stream_dropped() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(1);
-        let auth = Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        });
-        let stream = make_proxy_stream(conn, auth, ReceiverStream::new(rcv));
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::FullAccess,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
+        let stream = make_proxy_stream(conn, ctx, ReceiverStream::new(rcv));
 
         pin!(stream);
 
@@ -422,13 +438,17 @@ pub mod test {
     #[tokio::test]
     async fn perform_query_simple() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(1);
-        let auth = Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        });
-        let stream = make_proxy_stream(conn, auth, ReceiverStream::new(rcv));
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::FullAccess,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
+        let stream = make_proxy_stream(conn, ctx, ReceiverStream::new(rcv));
 
         pin!(stream);
 
@@ -442,14 +462,18 @@ pub mod test {
     #[tokio::test]
     async fn single_query_split_response() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(1);
-        let auth = Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        });
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::FullAccess,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
         // limit the size of the response to force a split
-        let stream = make_proxy_stream_inner(conn, auth, ReceiverStream::new(rcv), 500);
+        let stream = make_proxy_stream_inner(conn, ctx, ReceiverStream::new(rcv), 500);
 
         pin!(stream);
 
@@ -495,13 +519,17 @@ pub mod test {
     #[tokio::test]
     async fn request_interupted() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(2);
-        let auth = Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        });
-        let stream = make_proxy_stream(conn, auth, ReceiverStream::new(rcv));
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::FullAccess,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
+        let stream = make_proxy_stream(conn, ctx, ReceiverStream::new(rcv));
 
         pin!(stream);
 
@@ -518,13 +546,17 @@ pub mod test {
     #[tokio::test]
     async fn perform_multiple_queries() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(1);
-        let auth = Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        });
-        let stream = make_proxy_stream(conn, auth, ReceiverStream::new(rcv));
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::FullAccess,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
+        let stream = make_proxy_stream(conn, ctx, ReceiverStream::new(rcv));
 
         pin!(stream);
 
@@ -541,13 +573,17 @@ pub mod test {
     #[tokio::test]
     async fn query_number_less_than_previous_query() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(1);
-        let auth = Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        });
-        let stream = make_proxy_stream(conn, auth, ReceiverStream::new(rcv));
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::FullAccess,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
+        let stream = make_proxy_stream(conn, ctx, ReceiverStream::new(rcv));
 
         pin!(stream);
 
@@ -566,13 +602,17 @@ pub mod test {
     #[tokio::test]
     async fn describe() {
         let tmp = tempdir().unwrap();
-        let conn = LibSqlConnection::new_test(tmp.path());
+        let conn = LibSqlConnection::new_test(tmp.path()).await;
         let (snd, rcv) = mpsc::channel(1);
-        let auth = Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        });
-        let stream = make_proxy_stream(conn, auth, ReceiverStream::new(rcv));
+        let (maker, manager) = metastore_connection_maker(None, tmp.path()).await.unwrap();
+        let ctx = RequestContext::new(
+            Authenticated::FullAccess,
+            NamespaceName::default(),
+            MetaStore::new(Default::default(), tmp.path(), maker().unwrap(), manager)
+                .await
+                .unwrap(),
+        );
+        let stream = make_proxy_stream(conn, ctx, ReceiverStream::new(rcv));
 
         pin!(stream);
 

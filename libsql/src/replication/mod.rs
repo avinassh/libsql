@@ -18,7 +18,7 @@ use tracing::Instrument;
 
 use crate::database::EncryptionConfig;
 use crate::parser::Statement;
-use crate::Result;
+use crate::{errors, Result};
 
 use libsql_replication::replicator::ReplicatorClient;
 
@@ -94,12 +94,22 @@ impl Writer {
     pub(crate) fn replicator(&self) -> Option<&EmbeddedReplicator> {
         self.replicator.as_ref()
     }
+
+    pub(crate) fn new_client_id(&mut self) {
+        self.client.new_client_id()
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct EmbeddedReplicator {
     replicator: Arc<Mutex<Replicator<Either<RemoteClient, LocalClient>>>>,
     bg_abort: Option<Arc<DropAbort>>,
+}
+
+impl From<libsql_replication::replicator::Error> for errors::Error {
+    fn from(err: libsql_replication::replicator::Error) -> Self {
+        errors::Error::Replication(err.into())
+    }
 }
 
 impl EmbeddedReplicator {
@@ -109,7 +119,7 @@ impl EmbeddedReplicator {
         auto_checkpoint: u32,
         encryption_config: Option<EncryptionConfig>,
         perodic_sync: Option<Duration>,
-    ) -> Self {
+    ) -> Result<Self> {
         let replicator = Arc::new(Mutex::new(
             Replicator::new(
                 Either::Left(client),
@@ -117,8 +127,7 @@ impl EmbeddedReplicator {
                 auto_checkpoint,
                 encryption_config,
             )
-            .await
-            .unwrap(),
+            .await?,
         ));
 
         let mut replicator = Self {
@@ -139,13 +148,13 @@ impl EmbeddedReplicator {
                         tokio::time::sleep(sync_duration).await;
                     }
                 }
-                .instrument(tracing::info_span!("periodic_sync")),
+                .instrument(tracing::info_span!("sync_interval")),
             );
 
             replicator.bg_abort = Some(Arc::new(DropAbort(jh.abort_handle())));
         }
 
-        replicator
+        Ok(replicator)
     }
 
     pub async fn with_local(
@@ -153,7 +162,7 @@ impl EmbeddedReplicator {
         db_path: PathBuf,
         auto_checkpoint: u32,
         encryption_config: Option<EncryptionConfig>,
-    ) -> Self {
+    ) -> Result<Self> {
         let replicator = Arc::new(Mutex::new(
             Replicator::new(
                 Either::Right(client),
@@ -161,14 +170,13 @@ impl EmbeddedReplicator {
                 auto_checkpoint,
                 encryption_config,
             )
-            .await
-            .unwrap(),
+            .await?,
         ));
 
-        Self {
+        Ok(Self {
             replicator,
             bg_abort: None,
-        }
+        })
     }
 
     pub async fn sync_oneshot(&self) -> Result<Option<FrameNo>> {

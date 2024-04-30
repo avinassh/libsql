@@ -21,15 +21,13 @@ type Error = crate::Error;
 
 #[derive(Clone, Debug)]
 pub enum Cipher {
-    // SQLCipher: AES 256 Bit (recommended)
-    SQLCipher,
     // AES 256 Bit CBC - No HMAC (wxSQLite3)
     Aes256Cbc,
 }
 
 impl Default for Cipher {
     fn default() -> Self {
-        Cipher::SQLCipher
+        Cipher::Aes256Cbc
     }
 }
 
@@ -38,7 +36,6 @@ impl FromStr for Cipher {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "sqlcipher" => Ok(Cipher::SQLCipher),
             "aes256cbc" => Ok(Cipher::Aes256Cbc),
             _ => Err(Self::Err::new(21)),
         }
@@ -49,7 +46,6 @@ impl Cipher {
     #[cfg(feature = "encryption")]
     pub fn cipher_id(&self) -> i32 {
         let name = match self {
-            Cipher::SQLCipher => "sqlcipher\0",
             Cipher::Aes256Cbc => "aes256cbc\0",
         };
         unsafe { sqlite3mc_cipher_index(name.as_ptr() as _) }
@@ -132,6 +128,31 @@ extern "C" {
     fn libsql_leak_pager(db: *mut libsql_ffi::sqlite3) -> *mut crate::ffi::Pager;
     fn libsql_generate_initial_vector(seed: u32, iv: *mut u8);
     fn libsql_generate_aes256_key(user_password: *const u8, password_length: u32, digest: *mut u8);
+}
+
+pub fn pghdr_creator(
+    data: &mut [u8; 4096],
+    _db: *mut libsql_ffi::sqlite3,
+) -> libsql_ffi::libsql_pghdr {
+    #[cfg(feature = "encryption")]
+    let pager = crate::connection::leak_pager(_db);
+    #[cfg(not(feature = "encryption"))]
+    let pager = std::ptr::null_mut();
+
+    libsql_ffi::libsql_pghdr {
+        pPage: std::ptr::null_mut(),
+        pData: data.as_mut_ptr() as _,
+        pExtra: std::ptr::null_mut(),
+        pCache: std::ptr::null_mut(),
+        pDirty: std::ptr::null_mut(),
+        pPager: pager,
+        pgno: 1,
+        pageHash: 0x02, // DIRTY
+        flags: 0,
+        nRef: 0,
+        pDirtyNext: std::ptr::null_mut(),
+        pDirtyPrev: std::ptr::null_mut(),
+    }
 }
 
 #[cfg(feature = "encryption")]

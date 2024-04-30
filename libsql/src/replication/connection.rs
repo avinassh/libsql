@@ -50,6 +50,8 @@ impl State {
     pub fn step(&self, kind: StmtKind) -> State {
         use State;
 
+        tracing::trace!("parser step: {:?} to {:?}", self, kind);
+
         match (*self, kind) {
             (State::TxnReadOnly, StmtKind::TxnBegin)
             | (State::Txn, StmtKind::TxnBegin)
@@ -66,7 +68,14 @@ impl State {
             (State::Txn, StmtKind::Release) => State::Txn,
             (_, StmtKind::Release) => State::Invalid,
 
-            (state, StmtKind::Other | StmtKind::Write | StmtKind::Read | StmtKind::Attach | StmtKind::Detach) => state,
+            (
+                state,
+                StmtKind::Other
+                | StmtKind::Write
+                | StmtKind::Read
+                | StmtKind::Attach
+                | StmtKind::Detach,
+            ) => state,
             (State::Invalid, _) => State::Invalid,
 
             (State::Init, StmtKind::TxnBegin) => State::Txn,
@@ -78,7 +87,7 @@ impl State {
     }
 }
 
-/// Given a an initial state and an array of queries, attempts to predict what the final state will
+/// Given an initial state and an array of queries, attempts to predict what the final state will
 /// be
 fn predict_final_state<'a>(
     mut state: State,
@@ -131,12 +140,12 @@ fn should_execute_local(state: &mut State, stmts: &[parser::Statement]) -> Resul
         }
 
         (init, State::Invalid) => {
-            // Panic here because the connection has become invalid and it can no longer be
-            // used
-            panic!(
-                "replication connection has reached an invalid state, started with {:?}",
-                init
-            );
+            let err = Err(Error::InvalidParserState(format!("{:?}", init)));
+
+            // Reset state always back to init so the user can start over
+            *state = State::Init;
+
+            return err;
         }
 
         _ => false,
@@ -262,7 +271,7 @@ impl Conn for RemoteConnection {
             .results
             .into_iter()
             .next()
-            .expect("Expected atleast one result");
+            .expect("Expected at least one result");
 
         let affected_row_count = match result.row_result {
             Some(RowResult::Row(row)) => {
@@ -343,6 +352,8 @@ impl Conn for RemoteConnection {
     fn last_insert_rowid(&self) -> i64 {
         self.inner.lock().last_insert_rowid
     }
+
+    async fn reset(&self) {}
 }
 
 pub struct ColumnMeta {
@@ -469,7 +480,7 @@ impl Stmt for RemoteStatement {
             .results
             .into_iter()
             .next()
-            .expect("Expected atleast one result");
+            .expect("Expected at least one result");
 
         let affected_row_count = match result.row_result {
             Some(RowResult::Row(row)) => {
@@ -503,7 +514,7 @@ impl Stmt for RemoteStatement {
             .results
             .into_iter()
             .next()
-            .expect("Expected atleast one result");
+            .expect("Expected at least one result");
 
         let rows = match result.row_result {
             Some(RowResult::Row(row)) => {

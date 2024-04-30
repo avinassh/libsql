@@ -34,7 +34,7 @@ cfg_core! {
 
 enum DbType {
     #[cfg(feature = "core")]
-    Memory,
+    Memory { db: crate::local::Database },
     #[cfg(feature = "core")]
     File {
         path: String,
@@ -60,7 +60,7 @@ impl fmt::Debug for DbType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             #[cfg(feature = "core")]
-            Self::Memory => write!(f, "Memory"),
+            Self::Memory { .. } => write!(f, "Memory"),
             #[cfg(feature = "core")]
             Self::File { .. } => write!(f, "File"),
             #[cfg(feature = "replication")]
@@ -83,8 +83,10 @@ cfg_core! {
         /// Open an in-memory libsql database.
         #[deprecated = "Use the new `Builder` to construct `Database`"]
         pub fn open_in_memory() -> Result<Self> {
+            let db = crate::local::Database::open(":memory:", OpenFlags::default())?;
+
             Ok(Database {
-                db_type: DbType::Memory,
+                db_type: DbType::Memory { db },
             })
         }
 
@@ -141,7 +143,7 @@ cfg_replication! {
             auth_token: String,
             encryption_config: Option<EncryptionConfig>,
         ) -> Result<Database> {
-            let https = connector();
+            let https = connector()?;
 
             Self::open_with_local_sync_remote_writes_connector(
                 db_path,
@@ -184,7 +186,7 @@ cfg_replication! {
                 None,
                 OpenFlags::default(),
                 encryption_config.clone(),
-                None
+                None,
             ).await?;
 
             Ok(Database {
@@ -200,7 +202,7 @@ cfg_replication! {
             token: impl Into<String>,
             encryption_config: Option<EncryptionConfig>,
         ) -> Result<Database> {
-            let https = connector();
+            let https = connector()?;
 
             Self::open_with_remote_sync_connector(db_path, url, token, https, false, encryption_config).await
         }
@@ -217,7 +219,7 @@ cfg_replication! {
             token: impl Into<String>,
             encryption_config: Option<EncryptionConfig>,
         ) -> Result<Database> {
-            let https = connector();
+            let https = connector()?;
 
             Self::open_with_remote_sync_connector(db_path, url, token, https, true, encryption_config).await
         }
@@ -259,9 +261,9 @@ cfg_replication! {
             version: Option<String>,
             read_your_writes: bool,
             encryption_config: Option<EncryptionConfig>,
-            periodic_sync: Option<std::time::Duration>,
+            sync_interval: Option<std::time::Duration>,
         ) -> Result<Database> {
-            let https = connector();
+            let https = connector()?;
 
             Self::open_with_remote_sync_connector_internal(
                 db_path,
@@ -271,7 +273,7 @@ cfg_replication! {
                 version,
                 read_your_writes,
                 encryption_config,
-                periodic_sync
+                sync_interval
             ).await
         }
 
@@ -284,7 +286,7 @@ cfg_replication! {
             version: Option<String>,
             read_your_writes: bool,
             encryption_config: Option<EncryptionConfig>,
-            periodic_sync: Option<std::time::Duration>,
+            sync_interval: Option<std::time::Duration>,
         ) -> Result<Database>
         where
             C: tower::Service<http::Uri> + Send + Clone + Sync + 'static,
@@ -308,7 +310,8 @@ cfg_replication! {
                 version,
                 read_your_writes,
                 encryption_config.clone(),
-                periodic_sync,
+                sync_interval,
+                None,
                 None
             ).await?;
 
@@ -385,7 +388,7 @@ cfg_remote! {
         /// Open a remote based HTTP database using libsql's hrana protocol.
         #[deprecated = "Use the new `Builder` to construct `Database`"]
         pub fn open_remote(url: impl Into<String>, auth_token: impl Into<String>) -> Result<Self> {
-            let https = connector();
+            let https = connector()?;
 
             Self::open_remote_with_connector_internal(url, auth_token, https, None)
         }
@@ -396,7 +399,7 @@ cfg_remote! {
             auth_token: impl Into<String>,
             version: impl Into<String>,
         ) -> Result<Self> {
-            let https = connector();
+            let https = connector()?;
 
             Self::open_remote_with_connector_internal(url, auth_token, https, Some(version.into()))
         }
@@ -461,10 +464,9 @@ impl Database {
     pub fn connect(&self) -> Result<Connection> {
         match &self.db_type {
             #[cfg(feature = "core")]
-            DbType::Memory => {
+            DbType::Memory { db } => {
                 use crate::local::impls::LibsqlConnection;
 
-                let db = crate::local::Database::open(":memory:", OpenFlags::default())?;
                 let conn = db.connect()?;
 
                 let conn = std::sync::Arc::new(LibsqlConnection { conn });
@@ -549,7 +551,7 @@ impl Database {
                 }
 
                 let local = LibsqlConnection { conn };
-                let writer = local.conn.writer().cloned();
+                let writer = local.conn.new_connection_writer();
                 let remote = crate::replication::RemoteConnection::new(local, writer);
                 let conn = std::sync::Arc::new(remote);
 
@@ -581,14 +583,21 @@ impl Database {
 }
 
 #[cfg(any(feature = "replication", feature = "remote"))]
-fn connector() -> hyper_rustls::HttpsConnector<hyper::client::HttpConnector> {
+fn connector() -> Result<hyper_rustls::HttpsConnector<hyper::client::HttpConnector>> {
     let mut http = hyper::client::HttpConnector::new();
     http.enforce_http(false);
     http.set_nodelay(true);
 
-    hyper_rustls::HttpsConnectorBuilder::new()
+    Ok(hyper_rustls::HttpsConnectorBuilder::new()
         .with_native_roots()
+        .map_err(crate::Error::InvalidTlsConfiguration)?
         .https_or_http()
         .enable_http1()
-        .wrap_connector(http)
+        .wrap_connector(http))
+}
+
+impl std::fmt::Debug for Database {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Database").finish()
+    }
 }

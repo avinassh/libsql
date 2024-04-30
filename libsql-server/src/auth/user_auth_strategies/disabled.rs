@@ -1,16 +1,15 @@
 use super::{UserAuthContext, UserAuthStrategy};
-use crate::auth::{AuthError, Authenticated, Authorized, Permission};
+use crate::auth::{AuthError, Authenticated};
 
 pub struct Disabled {}
 
 impl UserAuthStrategy for Disabled {
-    fn authenticate(&self, _context: UserAuthContext) -> Result<Authenticated, AuthError> {
-        tracing::info!("executing disabled auth");
-
-        Ok(Authenticated::Authorized(Authorized {
-            namespace: None,
-            permission: Permission::FullAccess,
-        }))
+    fn authenticate(
+        &self,
+        _context: Result<UserAuthContext, AuthError>,
+    ) -> Result<Authenticated, AuthError> {
+        tracing::trace!("executing disabled auth");
+        Ok(Authenticated::FullAccess)
     }
 }
 
@@ -22,25 +21,16 @@ impl Disabled {
 
 #[cfg(test)]
 mod tests {
-    use crate::namespace::NamespaceName;
-
     use super::*;
 
     #[test]
     fn authenticates() {
         let strategy = Disabled::new();
-        let context = UserAuthContext {
-            namespace: NamespaceName::default(),
-            namespace_credential: None,
-            user_credential: None,
-        };
+        let context = Ok(UserAuthContext::empty());
 
-        assert_eq!(
+        assert!(matches!(
             strategy.authenticate(context).unwrap(),
-            Authenticated::Authorized(Authorized {
-                namespace: None,
-                permission: Permission::FullAccess,
-            })
-        )
+            Authenticated::FullAccess
+        ))
     }
 }

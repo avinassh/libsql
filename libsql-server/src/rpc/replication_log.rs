@@ -19,10 +19,10 @@ use tonic::transport::server::TcpConnectInfo;
 use tonic::Status;
 use uuid::Uuid;
 
-use crate::auth::user_auth_strategies::UserAuthContext;
+use crate::auth::Jwt;
 use crate::auth::{parsers::parse_grpc_auth_header, Auth};
 use crate::connection::config::DatabaseConfig;
-use crate::namespace::{NamespaceName, NamespaceStore, PrimaryNamespaceMaker};
+use crate::namespace::{NamespaceName, NamespaceStore};
 use crate::replication::primary::frame_stream::FrameStream;
 use crate::replication::{LogReadError, ReplicationLogger};
 use crate::stats::Stats;
@@ -31,7 +31,7 @@ use crate::utils::services::idle_shutdown::IdleShutdownKicker;
 use super::extract_namespace;
 
 pub struct ReplicationLogService {
-    namespaces: NamespaceStore<PrimaryNamespaceMaker>,
+    namespaces: NamespaceStore,
     idle_shutdown_layer: Option<IdleShutdownKicker>,
     user_auth_strategy: Option<Auth>,
     disable_namespaces: bool,
@@ -47,7 +47,7 @@ pub const MAX_FRAMES_PER_BATCH: usize = 1024;
 
 impl ReplicationLogService {
     pub fn new(
-        namespaces: NamespaceStore<PrimaryNamespaceMaker>,
+        namespaces: NamespaceStore,
         idle_shutdown_layer: Option<IdleShutdownKicker>,
         user_auth_strategy: Option<Auth>,
         disable_namespaces: bool,
@@ -71,45 +71,34 @@ impl ReplicationLogService {
         req: &tonic::Request<T>,
         namespace: NamespaceName,
     ) -> Result<(), Status> {
+        // todo dupe #auth
         let namespace_jwt_key = self
             .namespaces
             .with(namespace.clone(), |ns| ns.jwt_key())
             .await;
 
-        let user_credential = parse_grpc_auth_header(req.metadata());
-
-        match namespace_jwt_key {
-            Ok(Ok(jwt_key)) => {
-                if let Some(auth) = &self.user_auth_strategy {
-                    auth.authenticate(UserAuthContext {
-                        namespace,
-                        namespace_credential: jwt_key,
-                        user_credential,
-                    })?;
-                }
-                Ok(())
-            }
+        let auth = match namespace_jwt_key {
+            Ok(Ok(Some(key))) => Some(Auth::new(Jwt::new(key))),
+            Ok(Ok(None)) => self.user_auth_strategy.clone(),
             Err(e) => match e.as_ref() {
-                crate::error::Error::NamespaceDoesntExist(_) => {
-                    if let Some(auth) = &self.user_auth_strategy {
-                        auth.authenticate(UserAuthContext {
-                            namespace,
-                            namespace_credential: None,
-                            user_credential,
-                        })?;
-                    }
-                    Ok(())
-                }
+                crate::error::Error::NamespaceDoesntExist(_) => self.user_auth_strategy.clone(),
                 _ => Err(Status::internal(format!(
                     "Error fetching jwt key for a namespace: {}",
                     e
-                ))),
+                )))?,
             },
             Ok(Err(e)) => Err(Status::internal(format!(
                 "Error fetching jwt key for a namespace: {}",
                 e
-            ))),
+            )))?,
+        };
+
+        if let Some(auth) = auth {
+            let user_credential = parse_grpc_auth_header(req.metadata());
+            auth.authenticate(user_credential)?;
         }
+
+        Ok(())
     }
 
     fn verify_session_token<R>(
@@ -161,14 +150,21 @@ impl ReplicationLogService {
     > {
         let (logger, config, version, stats, config_changed) = self
             .namespaces
-            .with(namespace, |ns| {
-                let logger = ns.db.wal_manager.wrapped().logger().clone();
+            .with(namespace, |ns| -> Result<_, Status> {
+                let logger = ns
+                    .db
+                    .as_primary()
+                    .ok_or_else(|| Status::invalid_argument("not a primary"))?
+                    .wal_wrapper
+                    .wrapper()
+                    .logger()
+                    .clone();
                 let config_changed = ns.config_changed();
                 let config = ns.config();
                 let version = ns.config_version();
                 let stats = ns.stats();
 
-                (logger, config, version, stats, config_changed)
+                Ok((logger, config, version, stats, config_changed))
             })
             .await
             .map_err(|e| {
@@ -177,7 +173,7 @@ impl ReplicationLogService {
                 } else {
                     Status::internal(e.to_string())
                 }
-            })?;
+            })??;
 
         if verify_session {
             self.verify_session_token(req, version)?;

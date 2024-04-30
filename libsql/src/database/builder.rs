@@ -17,6 +17,12 @@ use super::DbType;
 ///     includes the ability to delegate writes to a remote primary.
 /// - `new_remote`/`Remote` creates a database that does not create anything locally but will
 ///     instead run all queries on the remote database. This is essentially the pure HTTP api.
+///
+/// # Note
+///
+/// Embedded replica's require a clean database (no database file) or a previously synced database or else it will
+/// throw an error to prevent any misuse. To work around this error a user can delete the database
+/// and let it resync and create the wal_index metadata file.
 pub struct Builder<T = ()> {
     inner: T,
 }
@@ -52,9 +58,10 @@ impl Builder<()> {
                         version: None,
                     },
                     encryption_config: None,
-                    read_your_writes: false,
-                    periodic_sync: None,
-                    http_request_callback: None
+                    read_your_writes: true,
+                    sync_interval: None,
+                    http_request_callback: None,
+                    namespace: None
                 },
             }
         }
@@ -125,8 +132,9 @@ cfg_core! {
         /// Build the local database.
         pub async fn build(self) -> Result<Database> {
             let db = if self.inner.path == std::path::Path::new(":memory:") {
+                let db = crate::local::Database::open(":memory:", crate::OpenFlags::default())?;
                 Database {
-                    db_type: DbType::Memory,
+                    db_type: DbType::Memory { db } ,
                 }
             } else {
                 let path = self
@@ -157,8 +165,9 @@ cfg_replication! {
         remote: Remote,
         encryption_config: Option<EncryptionConfig>,
         read_your_writes: bool,
-        periodic_sync: Option<std::time::Duration>,
+        sync_interval: Option<std::time::Duration>,
         http_request_callback: Option<crate::util::HttpRequestCallback>,
+        namespace: Option<String>,
     }
 
     /// Local replica configuration type in [`Builder`].
@@ -194,6 +203,10 @@ cfg_replication! {
 
         /// Set weather you want writes to be visible locally before the write query returns. This
         /// means that you will be able to read your own writes if this is set to `true`.
+        ///
+        /// # Default
+        ///
+        /// This defaults to `true`.
         pub fn read_your_writes(mut self, read_your_writes: bool) -> Builder<RemoteReplica> {
             self.inner.read_your_writes = read_your_writes;
             self
@@ -202,8 +215,8 @@ cfg_replication! {
         /// Set the duration at which the replicator will automatically call `sync` in the
         /// background. The sync will continue for the duration that the resulted `Database`
         /// type is alive for, once it is dropped the background task will get dropped and stop.
-        pub fn periodic_sync(mut self, duration: std::time::Duration) -> Builder<RemoteReplica> {
-            self.inner.periodic_sync = Some(duration);
+        pub fn sync_interval(mut self, duration: std::time::Duration) -> Builder<RemoteReplica> {
+            self.inner.sync_interval = Some(duration);
             self
         }
 
@@ -214,6 +227,13 @@ cfg_replication! {
             self.inner.http_request_callback = Some(std::sync::Arc::new(f));
             self
 
+        }
+
+        /// Set the namespace that will be communicated to remote replica in the http header.
+        pub fn namespace(mut self, namespace: impl Into<String>) -> Builder<RemoteReplica>
+        {
+            self.inner.namespace = Some(namespace.into());
+            self
         }
 
         #[doc(hidden)]
@@ -235,14 +255,15 @@ cfg_replication! {
                     },
                 encryption_config,
                 read_your_writes,
-                periodic_sync,
-                http_request_callback
+                sync_interval,
+                http_request_callback,
+                namespace
             } = self.inner;
 
             let connector = if let Some(connector) = connector {
                 connector
             } else {
-                let https = super::connector();
+                let https = super::connector()?;
                 use tower::ServiceExt;
 
                 let svc = https
@@ -262,8 +283,9 @@ cfg_replication! {
                 version,
                 read_your_writes,
                 encryption_config.clone(),
-                periodic_sync,
-                http_request_callback
+                sync_interval,
+                http_request_callback,
+                namespace,
             )
             .await?;
 
@@ -311,7 +333,7 @@ cfg_replication! {
                 let connector = if let Some(connector) = connector {
                     connector
                 } else {
-                    let https = super::connector();
+                    let https = super::connector()?;
                     use tower::ServiceExt;
 
                     let svc = https
@@ -329,7 +351,7 @@ cfg_replication! {
                     version,
                     flags,
                     encryption_config.clone(),
-                    http_request_callback
+                    http_request_callback,
                 )
                 .await?
             } else {
@@ -375,7 +397,7 @@ cfg_remote! {
             let connector = if let Some(connector) = connector {
                 connector
             } else {
-                let https = super::connector();
+                let https = super::connector()?;
                 use tower::ServiceExt;
 
                 let svc = https

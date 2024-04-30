@@ -1,8 +1,12 @@
 use axum::response::IntoResponse;
-use hyper::StatusCode;
+use hyper::{header::ToStrError, StatusCode};
 use tonic::metadata::errors::InvalidMetadataValueBytes;
 
-use crate::{auth::AuthError, namespace::ForkError, query_result_builder::QueryResultBuilderError};
+use crate::{
+    auth::AuthError,
+    namespace::{ForkError, NamespaceName},
+    query_result_builder::QueryResultBuilderError,
+};
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +68,8 @@ pub enum Error {
     NamespaceAlreadyExist(String),
     #[error("Invalid namespace")]
     InvalidNamespace,
+    #[error("Invalid namespace bytes: `{0}`")]
+    InvalidNamespaceBytes(#[from] ToStrError),
     #[error("Replica meta error: {0}")]
     ReplicaMetaError(#[from] libsql_replication::meta::Error),
     #[error("Replicator error: {0}")]
@@ -102,7 +108,22 @@ pub enum Error {
     #[error("Unable to decode protobuf: {0}")]
     ProstDecode(#[from] prost::DecodeError),
     #[error("Shared schema error: {0}")]
-    SharedSchemaError(String),
+    SharedSchemaCreationError(String),
+    #[error("Shared schema usage error: {0}")]
+    SharedSchemaUsageError(String),
+
+    #[error("migration error: {0}")]
+    Migration(#[from] crate::schema::Error),
+    #[error("cannot create/update/delete database config while there are pending migration on the shared schema `{0}`")]
+    PendingMigrationOnSchema(NamespaceName),
+    #[error("couldn't find requested migration job")]
+    MigrationJobNotFound,
+    #[error("cannot delete `{0}` because databases are still refering to it")]
+    HasLinkedDbs(NamespaceName),
+    #[error("ATTACH is not permitted in migration scripts")]
+    AttachInMigration,
+    #[error("join failure: {0}")]
+    RuntimeTaskJoinError(#[from] tokio::task::JoinError),
 }
 
 impl AsRef<Self> for Error {
@@ -114,7 +135,7 @@ impl AsRef<Self> for Error {
     }
 }
 
-trait ResponseError: std::error::Error {
+pub trait ResponseError: std::error::Error {
     fn format_err(&self, status: StatusCode) -> axum::response::Response {
         let json = serde_json::json!({ "error": self.to_string() });
         tracing::error!("HTTP API: {}, {:?}", status, self);
@@ -163,6 +184,7 @@ impl IntoResponse for &Error {
             PrimaryConnectionTimeout => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
             NamespaceAlreadyExist(_) => self.format_err(StatusCode::BAD_REQUEST),
             InvalidNamespace => self.format_err(StatusCode::BAD_REQUEST),
+            InvalidNamespaceBytes(_) => self.format_err(StatusCode::BAD_REQUEST),
             LoadDumpError(e) => e.into_response(),
             InvalidMetadataBytes(_) => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
             ReplicaRestoreError => self.format_err(StatusCode::BAD_REQUEST),
@@ -180,16 +202,21 @@ impl IntoResponse for &Error {
             MetaStoreUpdateFailure(_) => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
             Ref(this) => this.as_ref().into_response(),
             ProstDecode(_) => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
-            SharedSchemaError(_) => self.format_err(StatusCode::BAD_REQUEST),
+            SharedSchemaCreationError(_) => self.format_err(StatusCode::BAD_REQUEST),
+            SharedSchemaUsageError(_) => self.format_err(StatusCode::BAD_REQUEST),
+            Migration(e) => e.into_response(),
+            PendingMigrationOnSchema(_) => self.format_err(StatusCode::BAD_REQUEST),
+            MigrationJobNotFound => self.format_err(StatusCode::NOT_FOUND),
+            HasLinkedDbs(_) => self.format_err(StatusCode::BAD_REQUEST),
+            AttachInMigration => self.format_err(StatusCode::BAD_REQUEST),
+            RuntimeTaskJoinError(_) => self.format_err(StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
 
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
-        let backtrace = std::backtrace::Backtrace::force_capture();
-
-        tracing::error!("IO error reported: {}, {:?}", value, backtrace);
+        tracing::error!("IO error reported: {:?}", value);
 
         Error::IOError(value)
     }
