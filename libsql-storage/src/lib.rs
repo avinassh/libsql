@@ -222,12 +222,10 @@ impl Wal for DurableWal {
         Ok(())
     }
 
-    fn savepoint(&mut self, rollback_data: &mut [u32]) {
-        todo!()
-    }
+    fn savepoint(&mut self, rollback_data: &mut [u32]) {}
 
     fn savepoint_undo(&mut self, rollback_data: &mut [u32]) -> Result<()> {
-        todo!()
+        Ok(())
     }
 
     fn insert_frames(
