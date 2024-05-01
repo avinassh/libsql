@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use libsql_storage::{DurableWalManager, LockManager};
 use libsql_sys::wal::wrapper::{WrapWal, WrappedWal};
 use libsql_sys::wal::{BusyHandler, CheckpointCallback, Sqlite3WalManager, Wal, WalManager};
 use libsql_sys::EncryptionConfig;
@@ -48,6 +49,7 @@ pub struct MakeLibSqlConn<W> {
     encryption_config: Option<EncryptionConfig>,
     block_writes: Arc<AtomicBool>,
     resolve_attach_path: ResolveNamespacePathFn,
+    lock_manager: Arc<std::sync::Mutex<LockManager>>,
 }
 
 impl<W> MakeLibSqlConn<W>
@@ -68,6 +70,7 @@ where
         encryption_config: Option<EncryptionConfig>,
         block_writes: Arc<AtomicBool>,
         resolve_attach_path: ResolveNamespacePathFn,
+        lock_manager: Arc<std::sync::Mutex<LockManager>>,
     ) -> Result<Self> {
         let mut this = Self {
             db_path,
@@ -83,7 +86,8 @@ where
             encryption_config,
             block_writes,
             resolve_attach_path,
-            connection_manager: ConnectionManager::default(),
+            connection_manager: ConnectionManager::new(Default::default()),
+            lock_manager,
         };
 
         let db = this.try_create_db().await?;
@@ -138,6 +142,7 @@ where
             self.block_writes.clone(),
             self.resolve_attach_path.clone(),
             self.connection_manager.clone(),
+            self.lock_manager.clone(),
         )
         .await
     }
@@ -307,13 +312,15 @@ where
         block_writes: Arc<AtomicBool>,
         resolve_attach_path: ResolveNamespacePathFn,
         connection_manager: ConnectionManager,
+        lock_manager: Arc<std::sync::Mutex<LockManager>>,
     ) -> crate::Result<Self> {
         let (conn, id) = tokio::task::spawn_blocking({
             let connection_manager = connection_manager.clone();
             move || -> crate::Result<_> {
                 let manager = ManagedConnectionWalWrapper::new(connection_manager);
                 let id = manager.id();
-                let wal = Sqlite3WalManager::default().wrap(manager).wrap(wal_wrapper);
+                let durable_wal = DurableWalManager::new(lock_manager);
+                let wal = durable_wal.wrap(manager).wrap(wal_wrapper);
 
                 let conn = Connection::new(
                     path.as_ref(),
