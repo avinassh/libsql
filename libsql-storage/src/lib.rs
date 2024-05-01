@@ -61,21 +61,21 @@ impl WalManager for DurableWalManager {
 
     fn destroy_log(&self, vfs: &mut Vfs, db_path: &std::ffi::CStr) -> Result<()> {
         trace!("DurableWalManager::destroy_log()");
-        let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
-            .unwrap_or("http://127.0.0.1:5002".to_string());
-        let client = StorageClient::connect(address);
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let mut client = tokio::task::block_in_place(|| rt.block_on(client)).unwrap();
-        let req = rpc::DestroyReq {};
-        let resp = client.destroy(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
+        // let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
+        //     .unwrap_or("http://127.0.0.1:5002".to_string());
+        // let client = StorageClient::connect(address);
+        // let rt = tokio::runtime::Runtime::new().unwrap();
+        // let mut client = tokio::task::block_in_place(|| rt.block_on(client)).unwrap();
+        // let req = rpc::DestroyReq {};
+        // let resp = client.destroy(req);
+        // let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
         Ok(())
     }
 
     fn log_exists(&self, vfs: &mut Vfs, db_path: &std::ffi::CStr) -> Result<bool> {
         trace!("DurableWalManager::log_exists()");
         // TODO: implement
-        Ok(false)
+        Ok(true)
     }
 
     fn destroy(self)
@@ -140,11 +140,14 @@ impl Wal for DurableWal {
 
     fn begin_read_txn(&mut self) -> Result<bool> {
         trace!("DurableWal::begin_read_txn()");
+        // TODO: give a read lock for this conn
+        // note down max frame number
         Ok(true)
     }
 
     fn end_read_txn(&mut self) {
         trace!("DurableWal::end_read_txn()");
+        // TODO: drop both read or write lock
     }
 
     fn find_frame(
@@ -152,6 +155,7 @@ impl Wal for DurableWal {
         page_no: std::num::NonZeroU32,
     ) -> Result<Option<std::num::NonZeroU32>> {
         trace!("DurableWal::find_frame(page_no: {:?})", page_no);
+        // TODO: send max frame number in the request
         let req = rpc::FindFrameReq {
             page_no: page_no.get() as u64,
         };
@@ -191,6 +195,8 @@ impl Wal for DurableWal {
     }
 
     fn begin_write_txn(&mut self) -> Result<()> {
+        // todo: check if the connection holds a read lock
+        // then try to acquire a write lock
         let mut lock_manager = self.lock_manager.lock().unwrap();
         if !lock_manager.lock("default".to_string(), self.name.clone()) {
             trace!(
@@ -207,7 +213,7 @@ impl Wal for DurableWal {
     }
 
     fn end_write_txn(&mut self) -> Result<()> {
-        // release lock
+        // release only if lock is write lock
         let mut lock_manager = self.lock_manager.lock().unwrap();
         trace!(
             "DurableWal::end_write_txn() id = {}, unlocked = {}",
@@ -236,6 +242,8 @@ impl Wal for DurableWal {
         is_commit: bool,
         sync_flags: std::ffi::c_int,
     ) -> Result<usize> {
+        // TODO: check if it has a write lock
+        // check if the size_after is > 0, if so then mark txn as committed
         trace!("name = {}", self.name);
         trace!("DurableWal::insert_frames(page_size: {}, size_after: {}, is_commit: {}, sync_flags: {})", page_size, size_after, is_commit, sync_flags);
         let frames = page_headers
@@ -279,12 +287,10 @@ impl Wal for DurableWal {
 
     fn uses_heap_memory(&self) -> bool {
         trace!("DurableWal::uses_heap_memory()");
-        false
+        true
     }
 
-    fn set_db(&mut self, db: &mut libsql_sys::wal::Sqlite3Db) {
-        todo!()
-    }
+    fn set_db(&mut self, db: &mut libsql_sys::wal::Sqlite3Db) {}
 
     fn callback(&self) -> i32 {
         trace!("DurableWal::callback()");
