@@ -348,11 +348,7 @@ impl Namespace {
         )
         .await?;
 
-        let wal_wrapper = make_replication_wal_wrapper(
-            bottomless_replicator,
-            logger.clone(),
-            ns_config.lock_manager.clone(),
-        );
+        let wal_wrapper = make_replication_wal_wrapper(bottomless_replicator, logger.clone());
         let connection_maker = MakeLibSqlConn::new(
             db_path.to_path_buf(),
             wal_wrapper.clone(),

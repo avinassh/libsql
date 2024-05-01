@@ -31,7 +31,7 @@ use super::connection_manager::{
 use super::program::{
     check_describe_auth, check_program_auth, DescribeCol, DescribeParam, DescribeResponse, Vm,
 };
-use super::{MakeConnection, Program, RequestContext};
+use super::{MakeConnection, Program, RequestContext, TXN_TIMEOUT};
 
 pub struct MakeLibSqlConn<W> {
     db_path: PathBuf,
@@ -72,6 +72,8 @@ where
         resolve_attach_path: ResolveNamespacePathFn,
         lock_manager: Arc<std::sync::Mutex<LockManager>>,
     ) -> Result<Self> {
+        let txn_timeout = config_store.get().txn_timeout.unwrap_or(TXN_TIMEOUT);
+
         let mut this = Self {
             db_path,
             stats,
@@ -86,7 +88,7 @@ where
             encryption_config,
             block_writes,
             resolve_attach_path,
-            connection_manager: ConnectionManager::new(Default::default()),
+            connection_manager: ConnectionManager::new(txn_timeout),
             lock_manager,
         };
 
@@ -177,7 +179,7 @@ impl LibSqlConnection<libsql_sys::wal::wrapper::PassthroughWalWrapper> {
             tokio::sync::watch::channel(None).1,
             Default::default(),
             Arc::new(|_| unreachable!()),
-            ConnectionManager::default(),
+            ConnectionManager::new(TXN_TIMEOUT),
         )
         .await
         .unwrap()
