@@ -112,7 +112,16 @@ impl DurableWal {
         let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
             .unwrap_or("http://127.0.0.1:5002".to_string());
         trace!("DurableWal::new() address = {}", address);
+
+        // let channel = Channel::from_static(address).connect_lazy().unwrap();
+        // let channel = Channel::builder("127.0.0.1:3000".parse().unwrap()).connect_lazy();
+
         let client = StorageClient::connect(address);
+        // let client = client.max_encoding_message_size(100);
+        // let client = StorageClient::new(channel)
+        //     .max_encoding_message_size(100)
+        //     .unwrap();
+
         let mut client = tokio::task::block_in_place(|| rt.block_on(client)).unwrap();
 
         let req = rpc::DbSizeReq {};
@@ -304,10 +313,14 @@ impl Wal for DurableWal {
         let req = rpc::InsertFramesReq {
             frames: self.write_cache.values().cloned().collect(),
         };
-        
         self.write_cache.clear();
         let mut binding = self.client.lock();
-        let resp = binding.insert_frames(req);
+        trace!("sending DurableWal::insert_frames() {:?}", req.frames.len());
+        let mut c = binding
+            .clone()
+            .max_encoding_message_size(256 * 1024 * 1024)
+            .max_decoding_message_size(256 * 1024 * 1024);
+        let resp = c.insert_frames(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         self.db_size = size_after;
         Ok(resp.into_inner().num_frames as usize)

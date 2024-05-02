@@ -56,7 +56,7 @@ impl InMemFrameStore {
 
 impl FrameStore for InMemFrameStore {
     // inserts a new frame for the page number and returns the new frame value
-    fn insert_frame(&mut self, page_no: u64, frame: bytes::Bytes) -> u64 {
+    fn insert_frame(&mut self, page_no: u64, frame: Bytes) -> u64 {
         let frame_no = self.max_frame_no + 1;
         self.max_frame_no = frame_no;
         self.frames.insert(
@@ -240,7 +240,23 @@ impl Storage for Service {
         trace!("insert_frames()");
         let mut num_frames = 0;
         let mut store = self.store.lock().unwrap();
-        for frame in request.into_inner().frames {
+        trace!("insert_frames() got lock");
+        let frames = request
+            .into_inner()
+            .frames
+            .into_iter()
+            .map(|frame| FrameData {
+                page_no: frame.page_no,
+                data: frame.data.into(),
+            });
+        let all_data: Vec<u8> = frames
+            .clone()
+            .map(|f| f.data.clone().to_vec())
+            .flatten()
+            .collect();
+        trace!("insert_frames() got frames (bytes): {:?}", all_data.len());
+        trace!("insert_frames() got frames: {:?}", frames.len());
+        for frame in frames {
             trace!(
                 "inserted for page {} frame {}",
                 frame.page_no,
