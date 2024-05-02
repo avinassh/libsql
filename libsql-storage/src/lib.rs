@@ -1,9 +1,9 @@
-// use libsql_sys::ffi::SQLITE_BUSY;
-// use libsql_sys::rusqlite;
 use libsql_sys::ffi::SQLITE_BUSY;
 use libsql_sys::rusqlite;
 use libsql_sys::wal::{Result, Vfs, Wal, WalManager};
 use sieve_cache::SieveCache;
+use std::collections::BTreeMap;
+use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 use tonic::transport::Channel;
 use tracing::trace;
@@ -94,6 +94,7 @@ pub struct DurableWal {
     lock_manager: Arc<Mutex<LockManager>>,
     runtime: Option<tokio::runtime::Runtime>,
     rt: tokio::runtime::Handle,
+    write_cache: BTreeMap<u32, rpc::Frame>,
 }
 
 impl DurableWal {
@@ -129,7 +130,38 @@ impl DurableWal {
             lock_manager,
             runtime,
             rt,
+            write_cache: BTreeMap::new(),
         }
+    }
+
+    fn find_frame_by_page_no(
+        &mut self,
+        page_no: std::num::NonZeroU32,
+    ) -> Result<Option<std::num::NonZeroU32>> {
+        trace!("DurableWal::find_frame_by_page_no(page_no: {:?})", page_no);
+        // TODO: send max frame number in the request
+        let req = rpc::FindFrameReq {
+            page_no: page_no.get() as u64,
+        };
+        let mut binding = self.client.lock();
+        let resp = binding.find_frame(req);
+        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
+        let frame_no = resp
+            .into_inner()
+            .frame_no
+            .map(|page_no| std::num::NonZeroU32::new(page_no as u32))
+            .flatten();
+        Ok(frame_no)
+    }
+
+    fn frames_count(&self) -> u32 {
+        let req = rpc::FramesInWalReq {};
+        let mut binding = self.client.lock();
+        let resp = binding.frames_in_wal(req);
+        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
+        let count = resp.into_inner().count;
+        trace!("DurableWal::frames_in_wal() = {}", count);
+        count
     }
 }
 
@@ -155,25 +187,31 @@ impl Wal for DurableWal {
         page_no: std::num::NonZeroU32,
     ) -> Result<Option<std::num::NonZeroU32>> {
         trace!("DurableWal::find_frame(page_no: {:?})", page_no);
-        // TODO: send max frame number in the request
-        let req = rpc::FindFrameReq {
-            page_no: page_no.get() as u64,
-        };
-        let mut binding = self.client.lock();
-        let resp = binding.find_frame(req);
-        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
-        let frame_no = resp
-            .into_inner()
-            .frame_no
-            .map(|page_no| std::num::NonZeroU32::new(page_no as u32))
-            .flatten();
-        Ok(frame_no)
+        let frame_no = self.find_frame_by_page_no(page_no).unwrap();
+        if frame_no.is_none() {
+            return Ok(None);
+        }
+        return Ok(Some(page_no));
     }
 
-    fn read_frame(&mut self, frame_no: std::num::NonZeroU32, buffer: &mut [u8]) -> Result<()> {
-        trace!("DurableWal::read_frame(frame_no: {:?})", frame_no);
+    // read_frame reads the page, not the frame
+    fn read_frame(&mut self, page_no: std::num::NonZeroU32, buffer: &mut [u8]) -> Result<()> {
+        trace!("DurableWal::read_frame(page_no: {:?})", page_no);
+        if let Some(frame) = self.write_cache.get(&(u32::from(page_no))) {
+            trace!(
+                "DurableWal::read_frame(page_no: {:?}) -- write cache hit",
+                page_no
+            );
+            buffer.copy_from_slice(&frame.data);
+            return Ok(());
+        }
+        let frame_no = self.find_frame_by_page_no(page_no).unwrap().unwrap();
         // check if the frame exists in the local cache
         if let Some(frame) = self.page_frames.get(&frame_no) {
+            trace!(
+                "DurableWal::read_frame(page_no: {:?}) -- read cache hit",
+                page_no
+            );
             buffer.copy_from_slice(&frame);
             return Ok(());
         }
@@ -191,7 +229,7 @@ impl Wal for DurableWal {
 
     fn db_size(&self) -> u32 {
         trace!("DurableWal::db_size() => {}", self.db_size);
-        self.db_size
+        self.frames_count()
     }
 
     fn begin_write_txn(&mut self) -> Result<()> {
@@ -246,17 +284,28 @@ impl Wal for DurableWal {
         // check if the size_after is > 0, if so then mark txn as committed
         trace!("name = {}", self.name);
         trace!("DurableWal::insert_frames(page_size: {}, size_after: {}, is_commit: {}, sync_flags: {})", page_size, size_after, is_commit, sync_flags);
-        let frames = page_headers
-            .iter()
-            .map(|header| {
-                let (page_no, frame) = header;
+        // add data from frame_headers to writeCache
+        for (page_no, frame) in page_headers.iter() {
+            self.write_cache.insert(
+                page_no,
                 rpc::Frame {
                     page_no: page_no as u64,
                     data: frame.to_vec(),
-                }
-            })
-            .collect();
-        let req = rpc::InsertFramesReq { frames };
+                },
+            );
+            // todo: update size after
+        }
+
+        if size_after <= 0 {
+            // todo: update new size
+            return Ok(0);
+        }
+
+        let req = rpc::InsertFramesReq {
+            frames: self.write_cache.values().cloned().collect(),
+        };
+        
+        self.write_cache.clear();
         let mut binding = self.client.lock();
         let resp = binding.insert_frames(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
@@ -298,13 +347,14 @@ impl Wal for DurableWal {
     }
 
     fn frames_in_wal(&self) -> u32 {
-        let req = rpc::FramesInWalReq {};
-        let mut binding = self.client.lock();
-        let resp = binding.frames_in_wal(req);
-        let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
-        let count = resp.into_inner().count;
-        trace!("DurableWal::frames_in_wal() = {}", count);
-        count
+        // let req = rpc::FramesInWalReq {};
+        // let mut binding = self.client.lock();
+        // let resp = binding.frames_in_wal(req);
+        // let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
+        // let count = resp.into_inner().count;
+        // trace!("DurableWal::frames_in_wal() = {}", count);
+        // count
+        0
     }
 }
 
