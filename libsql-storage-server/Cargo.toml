@@ -12,6 +12,8 @@ path = "src/main.rs"
 anyhow = "1.0.66"
 bytes = "1.5.0"
 clap = { version = "4.0.23", features = [ "derive", "env", "string" ] }
+foundationdb = { version = "0.9.0", features = ["embedded-fdb-include", "fdb-7_3"] }
+futures = "0.3.30"
 libsql-storage = { path = "../libsql-storage" }
 redis = "0.25.3"
 tokio = { version = "1.22.2", features = ["rt-multi-thread", "net", "io-std", "io-util", "time", "macros", "sync", "fs", "signal"] }

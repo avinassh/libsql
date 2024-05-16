@@ -1,7 +1,8 @@
-mod memory_store;
-mod redis_store;
+mod fdb_store;
+
 mod store;
 
+use crate::fdb_store::FDBFrameStore;
 use crate::store::FrameStore;
 use anyhow::Result;
 use bytes::Bytes;
@@ -14,10 +15,11 @@ use libsql_storage::rpc::{
 };
 use libsql_storage_server::version::Version;
 use redis::{Client, Commands, RedisResult};
-use redis_store::RedisFrameStore;
+use std::env::args;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU32;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{error, trace};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -39,14 +41,14 @@ struct FrameData {
 }
 
 struct Service {
-    store: Arc<Mutex<RedisFrameStore>>,
+    store: Arc<Mutex<FDBFrameStore>>,
     db_size: AtomicU32,
 }
 
 impl Service {
-    pub fn new(client: Client) -> Self {
+    pub fn new() -> Self {
         Self {
-            store: Arc::new(Mutex::new(RedisFrameStore::new(client))),
+            store: Arc::new(Mutex::new(FDBFrameStore::new())),
             db_size: AtomicU32::new(0),
         }
     }
@@ -60,7 +62,7 @@ impl Storage for Service {
     ) -> Result<tonic::Response<InsertFramesResp>, tonic::Status> {
         trace!("insert_frames()");
         let mut num_frames = 0;
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store.lock().await;
         trace!("insert_frames() got lock");
         let frames = request
             .into_inner()
@@ -81,7 +83,7 @@ impl Storage for Service {
             trace!(
                 "inserted for page {} frame {}",
                 frame.page_no,
-                store.insert_frame(frame.page_no, frame.data.into())
+                store.insert_frame(frame.page_no, frame.data.into()).await
             );
             num_frames += 1;
             self.db_size
@@ -96,7 +98,7 @@ impl Storage for Service {
     ) -> Result<tonic::Response<FindFrameResp>, tonic::Status> {
         let page_no = request.into_inner().page_no;
         trace!("find_frame(page_no={})", page_no);
-        if let Some(frame_no) = self.store.lock().unwrap().find_frame(page_no) {
+        if let Some(frame_no) = self.store.lock().await.find_frame(page_no).await {
             Ok(Response::new(FindFrameResp {
                 frame_no: Some(frame_no),
             }))
@@ -112,7 +114,7 @@ impl Storage for Service {
     ) -> Result<tonic::Response<ReadFrameResp>, tonic::Status> {
         let frame_no = request.into_inner().frame_no;
         trace!("read_frame(frame_no={})", frame_no);
-        if let Some(data) = self.store.lock().unwrap().read_frame(frame_no) {
+        if let Some(data) = self.store.lock().await.read_frame(frame_no).await {
             Ok(Response::new(ReadFrameResp {
                 frame: Some(data.clone().into()),
             }))
@@ -127,7 +129,7 @@ impl Storage for Service {
         request: tonic::Request<DestroyReq>,
     ) -> Result<tonic::Response<DestroyResp>, tonic::Status> {
         trace!("destroy()");
-        self.store.lock().unwrap().destroy();
+        self.store.lock().await.destroy();
         Ok(Response::new(DestroyResp {}))
     }
 
@@ -144,7 +146,7 @@ impl Storage for Service {
         request: Request<FramesInWalReq>,
     ) -> std::result::Result<Response<FramesInWalResp>, Status> {
         Ok(Response::new(FramesInWalResp {
-            count: self.store.lock().unwrap().frames_in_wal() as u32,
+            count: self.store.lock().await.frames_in_wal().await as u32,
         }))
     }
 
@@ -153,7 +155,7 @@ impl Storage for Service {
         request: Request<FramePageNumReq>,
     ) -> std::result::Result<Response<FramePageNumResp>, Status> {
         let frame_no = request.into_inner().frame_no;
-        if let Some(page_no) = self.store.lock().unwrap().frame_page_no(frame_no) {
+        if let Some(page_no) = self.store.lock().await.frame_page_no(frame_no).await {
             Ok(Response::new(FramePageNumResp { page_no }))
         } else {
             error!("frame_page_num() failed for frame_no={}", frame_no);
@@ -172,11 +174,7 @@ async fn main() -> Result<()> {
     .expect("setting default subscriber failed");
 
     let args = Cli::parse();
-    // export REDIS_ADDR=http://libsql-storage-server.internal:5002
-    let redis_addr = std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
-    let client = Client::open(redis_addr).unwrap();
-    let service = Service::new(client);
-
+    let service = Service::new();
     println!("Starting libSQL storage server on {}", args.listen_addr);
     trace!(
         "(trace) Starting libSQL storage server on {}",

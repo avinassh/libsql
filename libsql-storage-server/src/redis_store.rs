@@ -1,6 +1,6 @@
 use crate::store::FrameStore;
-use redis::Client;
-use redis::Commands;
+use bytes::Bytes;
+use redis::{Client, Commands, RedisResult};
 use tracing::error;
 
 pub struct RedisFrameStore {
