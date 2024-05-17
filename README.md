@@ -41,6 +41,10 @@ To get started with the libSQL API:
 * [Go](https://github.com/libsql/go-libsql)
 * [C](bindings/c) (experimental)
 
+Community Drivers:
+* [PHP](https://github.com/darkterminal/libsql-client-php)
+
+
 To build the SQLite-compatible C library and tools, run:
 
 ```sh
