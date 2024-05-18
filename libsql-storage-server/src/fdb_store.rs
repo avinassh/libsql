@@ -40,7 +40,7 @@ impl FrameStore for FDBFrameStore {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
-        let frame_no = self.get_max_frame_no(&txn, namespace).await;
+        let frame_no = self.get_max_frame_no(&txn, namespace).await + 1;
 
         let frame_key = format!("{}/f/{}/f", namespace, frame_no);
         let frame_page_key = format!("{}/f/{}/p", namespace, frame_no);
@@ -49,9 +49,9 @@ impl FrameStore for FDBFrameStore {
         txn.set(&frame_key.as_bytes(), &frame);
         txn.set(&frame_page_key.as_bytes(), &pack(&page_no));
         txn.set(&page_key.as_bytes(), &pack(&frame_no));
-        txn.set(&max_frame_key.as_bytes(), &pack(&(frame_no + 1)));
+        txn.set(&max_frame_key.as_bytes(), &pack(&(frame_no)));
         txn.commit().await.expect("commit failed");
-        frame_no + 1
+        frame_no
     }
 
     async fn read_frame(&self, frame_no: u64) -> Option<Bytes> {
@@ -84,13 +84,6 @@ impl FrameStore for FDBFrameStore {
             return None;
         }
         let frame_no: u64 = unpack(&result.unwrap().unwrap()).expect("failed to decode u64");
-        // let frame_no: u64 = unpack(
-        //     &txn.get(&page_key.as_bytes(), true)
-        //         .await
-        //         .expect("get failed")
-        //         .expect("frame not found"),
-        // )
-        // .expect("failed to decode u64");
         Some(frame_no)
     }
 
