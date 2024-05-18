@@ -1,8 +1,10 @@
 mod fdb_store;
 
+mod redis_store;
 mod store;
 
 use crate::fdb_store::FDBFrameStore;
+use crate::redis_store::RedisFrameStore;
 use crate::store::FrameStore;
 use anyhow::Result;
 use bytes::Bytes;
@@ -41,14 +43,21 @@ struct FrameData {
 }
 
 struct Service {
-    store: Arc<Mutex<FDBFrameStore>>,
+    // store: Arc<Mutex<FrameStore>>,
+    store: Arc<Mutex<RedisFrameStore>>,
     db_size: AtomicU32,
 }
 
 impl Service {
-    pub fn new() -> Self {
+    // pub fn new() -> Self {
+    //     Self {
+    //         store: Arc::new(Mutex::new(FDBFrameStore::new())),
+    //         db_size: AtomicU32::new(0),
+    //     }
+    // }
+    pub fn new(client: Client) -> Self {
         Self {
-            store: Arc::new(Mutex::new(FDBFrameStore::new())),
+            store: Arc::new(Mutex::new(RedisFrameStore::new(client))),
             db_size: AtomicU32::new(0),
         }
     }
@@ -174,7 +183,11 @@ async fn main() -> Result<()> {
     .expect("setting default subscriber failed");
 
     let args = Cli::parse();
-    let service = Service::new();
+    // export REDIS_ADDR=http://libsql-storage-server.internal:5002
+    let redis_addr = std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
+    let client = Client::open(redis_addr).unwrap();
+    let service = Service::new(client);
+    // let service = Service::new();
     println!("Starting libSQL storage server on {}", args.listen_addr);
     trace!(
         "(trace) Starting libSQL storage server on {}",

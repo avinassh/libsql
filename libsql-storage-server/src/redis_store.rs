@@ -14,7 +14,7 @@ impl RedisFrameStore {
 }
 
 impl FrameStore for RedisFrameStore {
-    fn insert_frame(&mut self, page_no: u64, frame: Bytes) -> u64 {
+    async fn insert_frame(&mut self, page_no: u64, frame: Bytes) -> u64 {
         let namespace = "default";
         let max_frame_key = format!("{}/max_frame_no", namespace);
 
@@ -46,7 +46,7 @@ impl FrameStore for RedisFrameStore {
         max_frame_no
     }
 
-    fn read_frame(&self, frame_no: u64) -> Option<Bytes> {
+    async fn read_frame(&self, frame_no: u64) -> Option<Bytes> {
         let namespace = "default";
         let frame_key = format!("f/{}/{}", namespace, frame_no);
         let mut con = self.client.get_connection().unwrap();
@@ -65,7 +65,7 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    fn find_frame(&self, page_no: u64) -> Option<u64> {
+    async fn find_frame(&self, page_no: u64) -> Option<u64> {
         let page_key = format!("p/{}/{}", "default", page_no);
         let mut con = self.client.get_connection().unwrap();
         let frame_no = con.get::<String, u64>(page_key.clone());
@@ -80,7 +80,7 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    fn frame_page_no(&self, frame_no: u64) -> Option<u64> {
+    async fn frame_page_no(&self, frame_no: u64) -> Option<u64> {
         let namespace = "default";
         let frame_key = format!("f/{}/{}", namespace, frame_no);
         let mut con = self.client.get_connection().unwrap();
@@ -99,7 +99,7 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    fn frames_in_wal(&self) -> u64 {
+    async fn frames_in_wal(&self) -> u64 {
         let namespace = "default";
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let mut con = self.client.get_connection().unwrap();
@@ -112,7 +112,7 @@ impl FrameStore for RedisFrameStore {
         })
     }
 
-    fn destroy(&mut self) {
+    async fn destroy(&mut self) {
         // remove all the keys in redis
         let mut con = self.client.get_connection().unwrap();
         // send a FLUSHALL request
