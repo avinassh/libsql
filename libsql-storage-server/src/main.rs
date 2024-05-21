@@ -44,23 +44,23 @@ struct FrameData {
 
 struct Service {
     // store: Arc<Mutex<FrameStore>>,
-    store: Arc<Mutex<RedisFrameStore>>,
+    store: Arc<Mutex<FDBFrameStore>>,
     db_size: AtomicU32,
 }
 
 impl Service {
-    // pub fn new() -> Self {
-    //     Self {
-    //         store: Arc::new(Mutex::new(FDBFrameStore::new())),
-    //         db_size: AtomicU32::new(0),
-    //     }
-    // }
-    pub fn new(client: Client) -> Self {
+    pub fn new() -> Self {
         Self {
-            store: Arc::new(Mutex::new(RedisFrameStore::new(client))),
+            store: Arc::new(Mutex::new(FDBFrameStore::new())),
             db_size: AtomicU32::new(0),
         }
     }
+    // pub fn new(client: Client) -> Self {
+    //     Self {
+    //         store: Arc::new(Mutex::new(RedisFrameStore::new(client))),
+    //         db_size: AtomicU32::new(0),
+    //     }
+    // }
 }
 
 #[tonic::async_trait]
@@ -186,8 +186,8 @@ async fn main() -> Result<()> {
     // export REDIS_ADDR=http://libsql-storage-server.internal:5002
     let redis_addr = std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
     let client = Client::open(redis_addr).unwrap();
-    let service = Service::new(client);
-    // let service = Service::new();
+    // let service = Service::new(client);
+    let service = Service::new();
     println!("Starting libSQL storage server on {}", args.listen_addr);
     trace!(
         "(trace) Starting libSQL storage server on {}",

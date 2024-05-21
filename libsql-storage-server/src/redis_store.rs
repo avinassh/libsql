@@ -1,4 +1,5 @@
 use crate::store::FrameStore;
+use crate::FrameData;
 use bytes::Bytes;
 use redis::{Client, Commands, RedisResult};
 use tracing::error;
@@ -43,6 +44,14 @@ impl FrameStore for RedisFrameStore {
                     .query(con)
             })
             .unwrap();
+        max_frame_no
+    }
+
+    async fn insert_frames(&mut self, frames: Vec<FrameData>) -> u64 {
+        let mut max_frame_no = 0;
+        for f in frames {
+            max_frame_no = self.insert_frame(f.page_no, f.data).await;
+        }
         max_frame_no
     }
 
