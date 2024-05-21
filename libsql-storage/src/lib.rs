@@ -95,6 +95,7 @@ pub struct DurableWal {
     runtime: Option<tokio::runtime::Runtime>,
     rt: tokio::runtime::Handle,
     write_cache: BTreeMap<u32, rpc::Frame>,
+    namespace: String,
 }
 
 impl DurableWal {
@@ -123,8 +124,10 @@ impl DurableWal {
         //     .unwrap();
 
         let mut client = tokio::task::block_in_place(|| rt.block_on(client)).unwrap();
-
-        let req = rpc::DbSizeReq {};
+        let namespace = "default".to_string();
+        let req = rpc::DbSizeReq {
+            namespace: namespace.clone(),
+        };
         let resp = client.db_size(req);
         let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
         let db_size = resp.into_inner().size as u32;
@@ -140,6 +143,7 @@ impl DurableWal {
             runtime,
             rt,
             write_cache: BTreeMap::new(),
+            namespace,
         }
     }
 
@@ -150,6 +154,7 @@ impl DurableWal {
         trace!("DurableWal::find_frame_by_page_no(page_no: {:?})", page_no);
         // TODO: send max frame number in the request
         let req = rpc::FindFrameReq {
+            namespace: self.namespace.clone(),
             page_no: page_no.get() as u64,
         };
         let mut binding = self.client.lock();
@@ -164,7 +169,9 @@ impl DurableWal {
     }
 
     fn frames_count(&self) -> u32 {
-        let req = rpc::FramesInWalReq {};
+        let req = rpc::FramesInWalReq {
+            namespace: self.namespace.clone(),
+        };
         let mut binding = self.client.lock();
         let resp = binding.frames_in_wal(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
@@ -225,7 +232,10 @@ impl Wal for DurableWal {
             return Ok(());
         }
         let frame_no = frame_no.get() as u64;
-        let req = rpc::ReadFrameReq { frame_no };
+        let req = rpc::ReadFrameReq {
+            namespace: self.namespace.clone(),
+            frame_no,
+        };
         let mut binding = self.client.lock();
         let resp = binding.read_frame(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
@@ -311,6 +321,7 @@ impl Wal for DurableWal {
         }
 
         let req = rpc::InsertFramesReq {
+            namespace: self.namespace.clone(),
             frames: self.write_cache.values().cloned().collect(),
         };
         self.write_cache.clear();

@@ -8,7 +8,8 @@ message Frame {
 }
 
 message InsertFramesReq {
-  repeated Frame frames = 1;
+  string namespace = 1;
+  repeated Frame frames = 2;
 }
 
 message InsertFramesResp {
@@ -16,7 +17,8 @@ message InsertFramesResp {
 }
 
 message FindFrameReq {
-  uint64 page_no = 1;
+  string namespace = 1;
+  uint64 page_no = 2;
 }
 
 message FindFrameResp {
@@ -24,7 +26,8 @@ message FindFrameResp {
 }
 
 message ReadFrameReq {
-  uint64 frame_no = 1;
+  string namespace = 1;
+  uint64 frame_no = 2;
 }
 
 message ReadFrameResp {
@@ -32,7 +35,7 @@ message ReadFrameResp {
 }
 
 message DbSizeReq {
-
+  string namespace = 1;
 }
 
 message DbSizeResp {
@@ -40,7 +43,7 @@ message DbSizeResp {
 }
 
 message FramesInWALReq {
-
+  string namespace = 1;
 }
 
 message FramesInWALResp {
@@ -48,14 +51,17 @@ message FramesInWALResp {
 }
 
 message FramePageNumReq {
-  uint64 frame_no = 1;
+  string namespace = 1;
+  uint64 frame_no = 2;
 }
 
 message FramePageNumResp {
   uint64 page_no = 1;
 }
 
-message DestroyReq {}
+message DestroyReq {
+  string namespace = 1;
+}
 
 message DestroyResp {}
 
