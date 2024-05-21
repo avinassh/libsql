@@ -18,7 +18,6 @@ impl FDBFrameStore {
     }
 
     async fn get_max_frame_no(&self, txn: &Transaction, namespace: &str) -> u64 {
-        let namespace = "default";
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let result = txn.get(&max_frame_key.as_bytes(), false).await;
         if let Err(e) = result {
@@ -30,30 +29,35 @@ impl FDBFrameStore {
             return 0;
         }
         let frame_no: u64 = unpack(&result.unwrap().unwrap()).expect("failed to decode u64");
-        tracing::info!("max_frame_no={}", frame_no);
+        tracing::info!("max_frame_no ({}) = {}", max_frame_key, frame_no);
         frame_no
     }
 
-    async fn insert_with_tx(&mut self, txn: &Transaction, frame_no: u64, frame: FrameData) {
-        let namespace = "default";
-        let frame_key = format!("{}/f/{}/f", namespace, frame_no);
+    async fn insert_with_tx(
+        &mut self,
+        namespace: &str,
+        txn: &Transaction,
+        frame_no: u64,
+        frame: FrameData,
+    ) {
+        let frame_data_key = format!("{}/f/{}/f", namespace, frame_no);
         let frame_page_key = format!("{}/f/{}/p", namespace, frame_no);
         let page_key = format!("{}/p/{}", namespace, frame.page_no);
 
-        txn.set(&frame_key.as_bytes(), &frame.data);
+        txn.set(&frame_data_key.as_bytes(), &frame.data);
         txn.set(&frame_page_key.as_bytes(), &pack(&frame.page_no));
         txn.set(&page_key.as_bytes(), &pack(&frame_no));
     }
 }
 
 impl FrameStore for FDBFrameStore {
-    async fn insert_frame(&mut self, page_no: u64, frame: Bytes) -> u64 {
-        let namespace = "default";
+    async fn insert_frame(&mut self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
         let frame_no = self.get_max_frame_no(&txn, namespace).await + 1;
         self.insert_with_tx(
+            namespace,
             &txn,
             frame_no,
             FrameData {
@@ -67,8 +71,7 @@ impl FrameStore for FDBFrameStore {
         frame_no
     }
 
-    async fn insert_frames(&mut self, frames: Vec<FrameData>) -> u64 {
-        let namespace = "default";
+    async fn insert_frames(&mut self, namespace: &str, frames: Vec<FrameData>) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
@@ -77,6 +80,7 @@ impl FrameStore for FDBFrameStore {
         for f in frames {
             frame_no += 1;
             self.insert_with_tx(
+                namespace,
                 &txn,
                 frame_no,
                 FrameData {
@@ -91,8 +95,7 @@ impl FrameStore for FDBFrameStore {
         frame_no
     }
 
-    async fn read_frame(&self, frame_no: u64) -> Option<Bytes> {
-        let namespace = "default";
+    async fn read_frame(&self, namespace: &str, frame_no: u64) -> Option<bytes::Bytes> {
         let frame_key = format!("{}/f/{}/f", namespace, frame_no);
 
         let db = foundationdb::Database::default().unwrap();
@@ -104,8 +107,7 @@ impl FrameStore for FDBFrameStore {
         None
     }
 
-    async fn find_frame(&self, page_no: u64) -> Option<u64> {
-        let namespace = "default";
+    async fn find_frame(&self, namespace: &str, page_no: u64) -> Option<u64> {
         let page_key = format!("{}/p/{}", namespace, page_no);
 
         let db = foundationdb::Database::default().unwrap();
@@ -124,8 +126,7 @@ impl FrameStore for FDBFrameStore {
         Some(frame_no)
     }
 
-    async fn frame_page_no(&self, frame_no: u64) -> Option<u64> {
-        let namespace = "default";
+    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u64> {
         let frame_key = format!("{}/f/{}/p", namespace, frame_no);
 
         let db = foundationdb::Database::default().unwrap();
@@ -141,12 +142,11 @@ impl FrameStore for FDBFrameStore {
         Some(page_no)
     }
 
-    async fn frames_in_wal(&self) -> u64 {
-        let namespace = "default";
+    async fn frames_in_wal(&self, namespace: &str) -> u64 {
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
         self.get_max_frame_no(&txn, namespace).await
     }
 
-    async fn destroy(&mut self) {}
+    async fn destroy(&mut self, namespace: &str) {}
 }

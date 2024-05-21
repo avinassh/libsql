@@ -73,14 +73,12 @@ impl Storage for Service {
         let mut num_frames = 0;
         let mut store = self.store.lock().await;
         trace!("insert_frames() got lock");
-        let frames = request
-            .into_inner()
-            .frames
-            .into_iter()
-            .map(|frame| FrameData {
-                page_no: frame.page_no,
-                data: frame.data.into(),
-            });
+        let request = request.into_inner();
+        let namespace = request.namespace;
+        let frames = request.frames.into_iter().map(|frame| FrameData {
+            page_no: frame.page_no,
+            data: frame.data.into(),
+        });
         let all_data: Vec<u8> = frames
             .clone()
             .map(|f| f.data.clone().to_vec())
@@ -92,7 +90,9 @@ impl Storage for Service {
             trace!(
                 "inserted for page {} frame {}",
                 frame.page_no,
-                store.insert_frame(frame.page_no, frame.data.into()).await
+                store
+                    .insert_frame(&namespace, frame.page_no, frame.data.into())
+                    .await
             );
             num_frames += 1;
             self.db_size
@@ -105,9 +105,17 @@ impl Storage for Service {
         &self,
         request: tonic::Request<FindFrameReq>,
     ) -> Result<tonic::Response<FindFrameResp>, tonic::Status> {
-        let page_no = request.into_inner().page_no;
+        let request = request.into_inner();
+        let page_no = request.page_no;
+        let namespace = request.namespace;
         trace!("find_frame(page_no={})", page_no);
-        if let Some(frame_no) = self.store.lock().await.find_frame(page_no).await {
+        if let Some(frame_no) = self
+            .store
+            .lock()
+            .await
+            .find_frame(&namespace, page_no)
+            .await
+        {
             Ok(Response::new(FindFrameResp {
                 frame_no: Some(frame_no),
             }))
@@ -121,9 +129,17 @@ impl Storage for Service {
         &self,
         request: tonic::Request<ReadFrameReq>,
     ) -> Result<tonic::Response<ReadFrameResp>, tonic::Status> {
-        let frame_no = request.into_inner().frame_no;
+        let request = request.into_inner();
+        let frame_no = request.frame_no;
+        let namespace = request.namespace;
         trace!("read_frame(frame_no={})", frame_no);
-        if let Some(data) = self.store.lock().await.read_frame(frame_no).await {
+        if let Some(data) = self
+            .store
+            .lock()
+            .await
+            .read_frame(&namespace, frame_no)
+            .await
+        {
             Ok(Response::new(ReadFrameResp {
                 frame: Some(data.clone().into()),
             }))
@@ -138,7 +154,8 @@ impl Storage for Service {
         request: tonic::Request<DestroyReq>,
     ) -> Result<tonic::Response<DestroyResp>, tonic::Status> {
         trace!("destroy()");
-        self.store.lock().await.destroy();
+        let namespace = request.into_inner().namespace;
+        self.store.lock().await.destroy(&namespace);
         Ok(Response::new(DestroyResp {}))
     }
 
@@ -154,8 +171,9 @@ impl Storage for Service {
         &self,
         request: Request<FramesInWalReq>,
     ) -> std::result::Result<Response<FramesInWalResp>, Status> {
+        let namespace = request.into_inner().namespace;
         Ok(Response::new(FramesInWalResp {
-            count: self.store.lock().await.frames_in_wal().await as u32,
+            count: self.store.lock().await.frames_in_wal(&namespace).await as u32,
         }))
     }
 
@@ -163,8 +181,16 @@ impl Storage for Service {
         &self,
         request: Request<FramePageNumReq>,
     ) -> std::result::Result<Response<FramePageNumResp>, Status> {
-        let frame_no = request.into_inner().frame_no;
-        if let Some(page_no) = self.store.lock().await.frame_page_no(frame_no).await {
+        let request = request.into_inner();
+        let frame_no = request.frame_no;
+        let namespace = request.namespace;
+        if let Some(page_no) = self
+            .store
+            .lock()
+            .await
+            .frame_page_no(&namespace, frame_no)
+            .await
+        {
             Ok(Response::new(FramePageNumResp { page_no }))
         } else {
             error!("frame_page_num() failed for frame_no={}", frame_no);

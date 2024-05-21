@@ -15,8 +15,7 @@ impl RedisFrameStore {
 }
 
 impl FrameStore for RedisFrameStore {
-    async fn insert_frame(&mut self, page_no: u64, frame: Bytes) -> u64 {
-        let namespace = "default";
+    async fn insert_frame(&mut self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
 
         let mut con = self.client.get_connection().unwrap();
@@ -47,16 +46,15 @@ impl FrameStore for RedisFrameStore {
         max_frame_no
     }
 
-    async fn insert_frames(&mut self, frames: Vec<FrameData>) -> u64 {
+    async fn insert_frames(&mut self, namespace: &str, frames: Vec<FrameData>) -> u64 {
         let mut max_frame_no = 0;
         for f in frames {
-            max_frame_no = self.insert_frame(f.page_no, f.data).await;
+            max_frame_no = self.insert_frame(namespace, f.page_no, f.data).await;
         }
         max_frame_no
     }
 
-    async fn read_frame(&self, frame_no: u64) -> Option<Bytes> {
-        let namespace = "default";
+    async fn read_frame(&self, namespace: &str, frame_no: u64) -> Option<bytes::Bytes> {
         let frame_key = format!("f/{}/{}", namespace, frame_no);
         let mut con = self.client.get_connection().unwrap();
         let result = con.hget::<String, &str, Vec<u8>>(frame_key.clone(), "f");
@@ -74,8 +72,8 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    async fn find_frame(&self, page_no: u64) -> Option<u64> {
-        let page_key = format!("p/{}/{}", "default", page_no);
+    async fn find_frame(&self, namespace: &str, page_no: u64) -> Option<u64> {
+        let page_key = format!("p/{}/{}", namespace, page_no);
         let mut con = self.client.get_connection().unwrap();
         let frame_no = con.get::<String, u64>(page_key.clone());
         match frame_no {
@@ -89,8 +87,7 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    async fn frame_page_no(&self, frame_no: u64) -> Option<u64> {
-        let namespace = "default";
+    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u64> {
         let frame_key = format!("f/{}/{}", namespace, frame_no);
         let mut con = self.client.get_connection().unwrap();
         let result = con.hget::<String, &str, u64>(frame_key.clone(), "p");
@@ -108,8 +105,7 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    async fn frames_in_wal(&self) -> u64 {
-        let namespace = "default";
+    async fn frames_in_wal(&self, namespace: &str) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let mut con = self.client.get_connection().unwrap();
         let result = con.get::<String, u64>(max_frame_key.clone());
@@ -121,7 +117,7 @@ impl FrameStore for RedisFrameStore {
         })
     }
 
-    async fn destroy(&mut self) {
+    async fn destroy(&mut self, namespace: &str) {
         // remove all the keys in redis
         let mut con = self.client.get_connection().unwrap();
         // send a FLUSHALL request
