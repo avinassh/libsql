@@ -14,6 +14,8 @@ pub struct InsertFramesReq {
     pub namespace: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub frames: ::prost::alloc::vec::Vec<Frame>,
+    #[prost(uint64, tag = "3")]
+    pub max_frame_no: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -28,6 +30,8 @@ pub struct FindFrameReq {
     pub namespace: ::prost::alloc::string::String,
     #[prost(uint64, tag = "2")]
     pub page_no: u64,
+    #[prost(uint64, tag = "3")]
+    pub max_frame_no: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

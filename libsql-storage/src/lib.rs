@@ -152,10 +152,10 @@ impl DurableWal {
         page_no: std::num::NonZeroU32,
     ) -> Result<Option<std::num::NonZeroU32>> {
         trace!("DurableWal::find_frame_by_page_no(page_no: {:?})", page_no);
-        // TODO: send max frame number in the request
         let req = rpc::FindFrameReq {
             namespace: self.namespace.clone(),
             page_no: page_no.get() as u64,
+            max_frame_no: 0,
         };
         let mut binding = self.client.lock();
         let resp = binding.find_frame(req);
@@ -323,6 +323,7 @@ impl Wal for DurableWal {
         let req = rpc::InsertFramesReq {
             namespace: self.namespace.clone(),
             frames: self.write_cache.values().cloned().collect(),
+            max_frame_no: 0,
         };
         self.write_cache.clear();
         let mut binding = self.client.lock();
