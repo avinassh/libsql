@@ -19,7 +19,6 @@ members = [
 
   "xtask", "libsql-hrana",
   "libsql-wal",
-  "bottomless2",
 ]
 
 exclude = [
