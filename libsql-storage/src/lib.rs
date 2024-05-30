@@ -1,11 +1,14 @@
-use libsql_sys::ffi::SQLITE_BUSY;
-use libsql_sys::rusqlite;
-use libsql_sys::wal::{Result, Vfs, Wal, WalManager};
-use sieve_cache::SieveCache;
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
+
 use tonic::transport::Channel;
+
+use libsql_sys::ffi::SQLITE_BUSY;
+use libsql_sys::rusqlite;
+use libsql_sys::wal::{Result, Vfs, Wal, WalManager};
+use rpc::storage_client::StorageClient;
+use sieve_cache::SieveCache;
 use tracing::trace;
 use uuid::uuid;
 
@@ -13,8 +16,6 @@ pub mod rpc {
     #![allow(clippy::all)]
     include!("generated/storage.rs");
 }
-
-use rpc::storage_client::StorageClient;
 
 #[derive(Clone)]
 pub struct DurableWalManager {

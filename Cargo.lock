@@ -1239,7 +1239,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
- "syn 2.0.60",
+ "syn 2.0.66",
  "which",
 ]
 
@@ -2480,7 +2480,7 @@ checksum = "f8db6653cbc621a3810d95d55bd342be3e71181d6df21a4eb29ef986202d3f9c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.60",
+ "syn 2.0.66",
  "try_map",
 ]
 
@@ -3537,7 +3537,7 @@ dependencies = [
 
 [[package]]
 name = "libsql-storage"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "libsql-sys",
  "log",
@@ -5933,7 +5933,7 @@ dependencies = [
  "proc-macro2",
  "prost-build",
  "quote",
- "syn 2.0.60",
+ "syn 2.0.66",
 ]
 
 [[package]]

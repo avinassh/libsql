@@ -9,7 +9,7 @@ pub struct Frame {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InsertFramesReq {
+pub struct InsertFramesRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
@@ -19,13 +19,13 @@ pub struct InsertFramesReq {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InsertFramesResp {
-    #[prost(int32, tag = "1")]
-    pub num_frames: i32,
+pub struct InsertFramesResponse {
+    #[prost(uint32, tag = "1")]
+    pub num_frames: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FindFrameReq {
+pub struct FindFrameRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
     #[prost(uint64, tag = "2")]
@@ -35,13 +35,13 @@ pub struct FindFrameReq {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FindFrameResp {
+pub struct FindFrameResponse {
     #[prost(uint64, optional, tag = "1")]
     pub frame_no: ::core::option::Option<u64>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ReadFrameReq {
+pub struct ReadFrameRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
     #[prost(uint64, tag = "2")]
@@ -49,37 +49,37 @@ pub struct ReadFrameReq {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ReadFrameResp {
+pub struct ReadFrameResponse {
     #[prost(bytes = "vec", optional, tag = "1")]
     pub frame: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DbSizeReq {
+pub struct DbSizeRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DbSizeResp {
+pub struct DbSizeResponse {
     #[prost(uint64, tag = "1")]
     pub size: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FramesInWalReq {
+pub struct FramesInWalRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FramesInWalResp {
-    #[prost(uint32, tag = "1")]
-    pub count: u32,
+pub struct FramesInWalResponse {
+    #[prost(uint64, tag = "1")]
+    pub count: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FramePageNumReq {
+pub struct FramePageNumRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
     #[prost(uint64, tag = "2")]
@@ -87,19 +87,19 @@ pub struct FramePageNumReq {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FramePageNumResp {
+pub struct FramePageNumResponse {
     #[prost(uint64, tag = "1")]
     pub page_no: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DestroyReq {
+pub struct DestroyRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DestroyResp {}
+pub struct DestroyResponse {}
 /// Generated client implementations.
 pub mod storage_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
@@ -187,9 +187,9 @@ pub mod storage_client {
         }
         pub async fn insert_frames(
             &mut self,
-            request: impl tonic::IntoRequest<super::InsertFramesReq>,
+            request: impl tonic::IntoRequest<super::InsertFramesRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::InsertFramesResp>,
+            tonic::Response<super::InsertFramesResponse>,
             tonic::Status,
         > {
             self.inner
@@ -212,8 +212,11 @@ pub mod storage_client {
         }
         pub async fn find_frame(
             &mut self,
-            request: impl tonic::IntoRequest<super::FindFrameReq>,
-        ) -> std::result::Result<tonic::Response<super::FindFrameResp>, tonic::Status> {
+            request: impl tonic::IntoRequest<super::FindFrameRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::FindFrameResponse>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -233,8 +236,11 @@ pub mod storage_client {
         }
         pub async fn read_frame(
             &mut self,
-            request: impl tonic::IntoRequest<super::ReadFrameReq>,
-        ) -> std::result::Result<tonic::Response<super::ReadFrameResp>, tonic::Status> {
+            request: impl tonic::IntoRequest<super::ReadFrameRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ReadFrameResponse>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -254,8 +260,8 @@ pub mod storage_client {
         }
         pub async fn db_size(
             &mut self,
-            request: impl tonic::IntoRequest<super::DbSizeReq>,
-        ) -> std::result::Result<tonic::Response<super::DbSizeResp>, tonic::Status> {
+            request: impl tonic::IntoRequest<super::DbSizeRequest>,
+        ) -> std::result::Result<tonic::Response<super::DbSizeResponse>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -273,9 +279,9 @@ pub mod storage_client {
         }
         pub async fn frames_in_wal(
             &mut self,
-            request: impl tonic::IntoRequest<super::FramesInWalReq>,
+            request: impl tonic::IntoRequest<super::FramesInWalRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::FramesInWalResp>,
+            tonic::Response<super::FramesInWalResponse>,
             tonic::Status,
         > {
             self.inner
@@ -298,9 +304,9 @@ pub mod storage_client {
         }
         pub async fn frame_page_num(
             &mut self,
-            request: impl tonic::IntoRequest<super::FramePageNumReq>,
+            request: impl tonic::IntoRequest<super::FramePageNumRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::FramePageNumResp>,
+            tonic::Response<super::FramePageNumResponse>,
             tonic::Status,
         > {
             self.inner
@@ -323,8 +329,11 @@ pub mod storage_client {
         }
         pub async fn destroy(
             &mut self,
-            request: impl tonic::IntoRequest<super::DestroyReq>,
-        ) -> std::result::Result<tonic::Response<super::DestroyResp>, tonic::Status> {
+            request: impl tonic::IntoRequest<super::DestroyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DestroyResponse>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -351,38 +360,47 @@ pub mod storage_server {
     pub trait Storage: Send + Sync + 'static {
         async fn insert_frames(
             &self,
-            request: tonic::Request<super::InsertFramesReq>,
+            request: tonic::Request<super::InsertFramesRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::InsertFramesResp>,
+            tonic::Response<super::InsertFramesResponse>,
             tonic::Status,
         >;
         async fn find_frame(
             &self,
-            request: tonic::Request<super::FindFrameReq>,
-        ) -> std::result::Result<tonic::Response<super::FindFrameResp>, tonic::Status>;
+            request: tonic::Request<super::FindFrameRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::FindFrameResponse>,
+            tonic::Status,
+        >;
         async fn read_frame(
             &self,
-            request: tonic::Request<super::ReadFrameReq>,
-        ) -> std::result::Result<tonic::Response<super::ReadFrameResp>, tonic::Status>;
+            request: tonic::Request<super::ReadFrameRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ReadFrameResponse>,
+            tonic::Status,
+        >;
         async fn db_size(
             &self,
-            request: tonic::Request<super::DbSizeReq>,
-        ) -> std::result::Result<tonic::Response<super::DbSizeResp>, tonic::Status>;
+            request: tonic::Request<super::DbSizeRequest>,
+        ) -> std::result::Result<tonic::Response<super::DbSizeResponse>, tonic::Status>;
         async fn frames_in_wal(
             &self,
-            request: tonic::Request<super::FramesInWalReq>,
-        ) -> std::result::Result<tonic::Response<super::FramesInWalResp>, tonic::Status>;
+            request: tonic::Request<super::FramesInWalRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::FramesInWalResponse>,
+            tonic::Status,
+        >;
         async fn frame_page_num(
             &self,
-            request: tonic::Request<super::FramePageNumReq>,
+            request: tonic::Request<super::FramePageNumRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::FramePageNumResp>,
+            tonic::Response<super::FramePageNumResponse>,
             tonic::Status,
         >;
         async fn destroy(
             &self,
-            request: tonic::Request<super::DestroyReq>,
-        ) -> std::result::Result<tonic::Response<super::DestroyResp>, tonic::Status>;
+            request: tonic::Request<super::DestroyRequest>,
+        ) -> std::result::Result<tonic::Response<super::DestroyResponse>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct StorageServer<T: Storage> {
@@ -466,16 +484,18 @@ pub mod storage_server {
                 "/storage.Storage/InsertFrames" => {
                     #[allow(non_camel_case_types)]
                     struct InsertFramesSvc<T: Storage>(pub Arc<T>);
-                    impl<T: Storage> tonic::server::UnaryService<super::InsertFramesReq>
+                    impl<
+                        T: Storage,
+                    > tonic::server::UnaryService<super::InsertFramesRequest>
                     for InsertFramesSvc<T> {
-                        type Response = super::InsertFramesResp;
+                        type Response = super::InsertFramesResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::InsertFramesReq>,
+                            request: tonic::Request<super::InsertFramesRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -510,16 +530,16 @@ pub mod storage_server {
                 "/storage.Storage/FindFrame" => {
                     #[allow(non_camel_case_types)]
                     struct FindFrameSvc<T: Storage>(pub Arc<T>);
-                    impl<T: Storage> tonic::server::UnaryService<super::FindFrameReq>
+                    impl<T: Storage> tonic::server::UnaryService<super::FindFrameRequest>
                     for FindFrameSvc<T> {
-                        type Response = super::FindFrameResp;
+                        type Response = super::FindFrameResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::FindFrameReq>,
+                            request: tonic::Request<super::FindFrameRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -554,16 +574,16 @@ pub mod storage_server {
                 "/storage.Storage/ReadFrame" => {
                     #[allow(non_camel_case_types)]
                     struct ReadFrameSvc<T: Storage>(pub Arc<T>);
-                    impl<T: Storage> tonic::server::UnaryService<super::ReadFrameReq>
+                    impl<T: Storage> tonic::server::UnaryService<super::ReadFrameRequest>
                     for ReadFrameSvc<T> {
-                        type Response = super::ReadFrameResp;
+                        type Response = super::ReadFrameResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::ReadFrameReq>,
+                            request: tonic::Request<super::ReadFrameRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -598,16 +618,16 @@ pub mod storage_server {
                 "/storage.Storage/DbSize" => {
                     #[allow(non_camel_case_types)]
                     struct DbSizeSvc<T: Storage>(pub Arc<T>);
-                    impl<T: Storage> tonic::server::UnaryService<super::DbSizeReq>
+                    impl<T: Storage> tonic::server::UnaryService<super::DbSizeRequest>
                     for DbSizeSvc<T> {
-                        type Response = super::DbSizeResp;
+                        type Response = super::DbSizeResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::DbSizeReq>,
+                            request: tonic::Request<super::DbSizeRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -642,16 +662,18 @@ pub mod storage_server {
                 "/storage.Storage/FramesInWAL" => {
                     #[allow(non_camel_case_types)]
                     struct FramesInWALSvc<T: Storage>(pub Arc<T>);
-                    impl<T: Storage> tonic::server::UnaryService<super::FramesInWalReq>
+                    impl<
+                        T: Storage,
+                    > tonic::server::UnaryService<super::FramesInWalRequest>
                     for FramesInWALSvc<T> {
-                        type Response = super::FramesInWalResp;
+                        type Response = super::FramesInWalResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::FramesInWalReq>,
+                            request: tonic::Request<super::FramesInWalRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -686,16 +708,18 @@ pub mod storage_server {
                 "/storage.Storage/FramePageNum" => {
                     #[allow(non_camel_case_types)]
                     struct FramePageNumSvc<T: Storage>(pub Arc<T>);
-                    impl<T: Storage> tonic::server::UnaryService<super::FramePageNumReq>
+                    impl<
+                        T: Storage,
+                    > tonic::server::UnaryService<super::FramePageNumRequest>
                     for FramePageNumSvc<T> {
-                        type Response = super::FramePageNumResp;
+                        type Response = super::FramePageNumResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::FramePageNumReq>,
+                            request: tonic::Request<super::FramePageNumRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -730,16 +754,16 @@ pub mod storage_server {
                 "/storage.Storage/Destroy" => {
                     #[allow(non_camel_case_types)]
                     struct DestroySvc<T: Storage>(pub Arc<T>);
-                    impl<T: Storage> tonic::server::UnaryService<super::DestroyReq>
+                    impl<T: Storage> tonic::server::UnaryService<super::DestroyRequest>
                     for DestroySvc<T> {
-                        type Response = super::DestroyResp;
+                        type Response = super::DestroyResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::DestroyReq>,
+                            request: tonic::Request<super::DestroyRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
