@@ -1,5 +1,6 @@
 use crate::store::FrameStore;
 use crate::FrameData;
+use async_trait::async_trait;
 use bytes::Bytes;
 use foundationdb::api::NetworkAutoStop;
 use foundationdb::tuple::pack;
@@ -50,6 +51,7 @@ impl FDBFrameStore {
     }
 }
 
+#[async_trait]
 impl FrameStore for FDBFrameStore {
     async fn insert_frame(&mut self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);

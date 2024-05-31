@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.66"
 bytes = "1.5.0"
-clap = { version = "4.0.23", features = [ "derive", "env", "string" ] }
+clap = { version = "4.0.23", features = ["derive", "env", "string"] }
 foundationdb = { version = "0.9.0", features = ["embedded-fdb-include", "fdb-7_3"] }
 futures = "0.3.30"
 libsql-storage = { path = "../libsql-storage" }
@@ -20,6 +20,8 @@ tokio = { version = "1.22.2", features = ["rt-multi-thread", "net", "io-std", "i
 tonic = { version = "0.10.0", features = ["tls"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+async-trait = "0.1.80"
+serde = "1.0.203"
 
 [dev-dependencies]
 

@@ -1,34 +1,42 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
 use clap::Parser;
+use libsql_storage::rpc::storage_server::{Storage, StorageServer};
 use libsql_storage::rpc::{
     DbSizeRequest, DbSizeResponse, DestroyRequest, DestroyResponse, FindFrameRequest,
     FindFrameResponse, FramePageNumRequest, FramePageNumResponse, FramesInWalRequest,
     FramesInWalResponse, InsertFramesRequest, InsertFramesResponse, ReadFrameRequest,
     ReadFrameResponse,
 };
-use libsql_storage::rpc::storage_server::{Storage, StorageServer};
 use libsql_storage_server::version::Version;
 use redis::{Client, Commands, RedisResult};
+use serde;
 use tokio::sync::Mutex;
-use tonic::{Request, Response, Status, transport::Server};
+use tonic::{transport::Server, Request, Response, Status};
 use tracing::{error, trace};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use crate::fdb_store::FDBFrameStore;
+use crate::memory_store::InMemFrameStore;
 use crate::redis_store::RedisFrameStore;
 use crate::store::FrameStore;
 
 mod fdb_store;
-
+mod memory_store;
 mod redis_store;
 mod store;
 
-/// libSQL storage server
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum StorageType {
+    InMemory,
+    Redis,
+    FoundationDB,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "libsql-storage-server")]
 #[command(about = "libSQL storage server", version = Version::default(), long_about = None)]
@@ -36,33 +44,35 @@ struct Cli {
     /// The address and port the storage RPC protocol listens to. Example: `127.0.0.1:5002`.
     #[clap(long, env = "LIBSQL_STORAGE_LISTEN_ADDR", default_value = "[::]:5002")]
     listen_addr: SocketAddr,
+
+    #[clap(value_enum, long, default_value = "in-memory")]
+    storage_type: StorageType,
 }
 
 #[derive(Default)]
 struct FrameData {
     page_no: u64,
-    data: bytes::Bytes,
+    data: Bytes,
 }
 
 struct Service {
-    // store: Arc<Mutex<FrameStore>>,
-    store: Arc<Mutex<FDBFrameStore>>,
+    store: Arc<Mutex<dyn FrameStore + Send + Sync>>,
     db_size: AtomicU32,
 }
 
 impl Service {
     pub fn new() -> Self {
         Self {
-            store: Arc::new(Mutex::new(FDBFrameStore::new())),
+            store: Arc::new(Mutex::new(InMemFrameStore::new())),
             db_size: AtomicU32::new(0),
         }
     }
-    // pub fn new(client: Client) -> Self {
-    //     Self {
-    //         store: Arc::new(Mutex::new(RedisFrameStore::new(client))),
-    //         db_size: AtomicU32::new(0),
-    //     }
-    // }
+    pub fn with_store(store: Arc<Mutex<dyn FrameStore + Send + Sync>>) -> Self {
+        Self {
+            store,
+            db_size: AtomicU32::new(0),
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -151,16 +161,6 @@ impl Storage for Service {
         }
     }
 
-    async fn destroy(
-        &self,
-        request: tonic::Request<DestroyRequest>,
-    ) -> Result<tonic::Response<DestroyResponse>, tonic::Status> {
-        trace!("destroy()");
-        let namespace = request.into_inner().namespace;
-        self.store.lock().await.destroy(&namespace);
-        Ok(Response::new(DestroyResponse {}))
-    }
-
     async fn db_size(
         &self,
         request: tonic::Request<DbSizeRequest>,
@@ -199,6 +199,16 @@ impl Storage for Service {
             Ok(Response::new(FramePageNumResponse { page_no: 0 }))
         }
     }
+
+    async fn destroy(
+        &self,
+        request: tonic::Request<DestroyRequest>,
+    ) -> Result<tonic::Response<DestroyResponse>, tonic::Status> {
+        trace!("destroy()");
+        let namespace = request.into_inner().namespace;
+        self.store.lock().await.destroy(&namespace).await;
+        Ok(Response::new(DestroyResponse {}))
+    }
 }
 
 #[tokio::main]
@@ -214,8 +224,8 @@ async fn main() -> Result<()> {
     // export REDIS_ADDR=http://libsql-storage-server.internal:5002
     let redis_addr = std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
     let client = Client::open(redis_addr).unwrap();
-    // let service = Service::new(client);
-    let service = Service::new();
+    Arc::new(Mutex::new(RedisFrameStore::new(client)));
+    let service = Service::with_store(Arc::new(Mutex::new(FDBFrameStore::new())));
     println!("Starting libSQL storage server on {}", args.listen_addr);
     trace!(
         "(trace) Starting libSQL storage server on {}",

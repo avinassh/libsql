@@ -1,6 +1,8 @@
 use crate::FrameData;
+use async_trait::async_trait;
 
-pub trait FrameStore {
+#[async_trait]
+pub trait FrameStore: Send + Sync {
     async fn insert_frame(&mut self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64;
     async fn insert_frames(&mut self, namespace: &str, frames: Vec<FrameData>) -> u64;
     async fn read_frame(&self, namespace: &str, frame_no: u64) -> Option<bytes::Bytes>;
