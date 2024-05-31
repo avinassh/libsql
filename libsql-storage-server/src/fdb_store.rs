@@ -1,7 +1,6 @@
 use crate::store::FrameData;
 use crate::store::FrameStore;
 use async_trait::async_trait;
-use bytes::Bytes;
 use foundationdb::api::NetworkAutoStop;
 use foundationdb::tuple::pack;
 use foundationdb::tuple::unpack;

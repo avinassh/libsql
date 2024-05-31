@@ -1,13 +1,7 @@
 use crate::memory_store::InMemFrameStore;
 use crate::store::{FrameData, FrameStore};
-use bytes::Bytes;
+use libsql_storage::rpc;
 use libsql_storage::rpc::storage_server::Storage;
-use libsql_storage::rpc::{
-    DbSizeRequest, DbSizeResponse, DestroyRequest, DestroyResponse, FindFrameRequest,
-    FindFrameResponse, FramePageNumRequest, FramePageNumResponse, FramesInWalRequest,
-    FramesInWalResponse, InsertFramesRequest, InsertFramesResponse, ReadFrameRequest,
-    ReadFrameResponse,
-};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -38,8 +32,8 @@ impl Service {
 impl Storage for Service {
     async fn insert_frames(
         &self,
-        request: tonic::Request<InsertFramesRequest>,
-    ) -> anyhow::Result<tonic::Response<InsertFramesResponse>, tonic::Status> {
+        request: tonic::Request<rpc::InsertFramesRequest>,
+    ) -> anyhow::Result<tonic::Response<rpc::InsertFramesResponse>, tonic::Status> {
         trace!("insert_frames()");
         let mut num_frames = 0;
         let mut store = self.store.lock().await;
@@ -69,13 +63,13 @@ impl Storage for Service {
             self.db_size
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        Ok(Response::new(InsertFramesResponse { num_frames }))
+        Ok(Response::new(rpc::InsertFramesResponse { num_frames }))
     }
 
     async fn find_frame(
         &self,
-        request: tonic::Request<FindFrameRequest>,
-    ) -> anyhow::Result<tonic::Response<FindFrameResponse>, tonic::Status> {
+        request: tonic::Request<rpc::FindFrameRequest>,
+    ) -> anyhow::Result<tonic::Response<rpc::FindFrameResponse>, tonic::Status> {
         let request = request.into_inner();
         let page_no = request.page_no;
         let namespace = request.namespace;
@@ -87,19 +81,19 @@ impl Storage for Service {
             .find_frame(&namespace, page_no)
             .await
         {
-            Ok(Response::new(FindFrameResponse {
+            Ok(Response::new(rpc::FindFrameResponse {
                 frame_no: Some(frame_no),
             }))
         } else {
             error!("find_frame() failed for page_no={}", page_no);
-            Ok(Response::new(FindFrameResponse { frame_no: None }))
+            Ok(Response::new(rpc::FindFrameResponse { frame_no: None }))
         }
     }
 
     async fn read_frame(
         &self,
-        request: tonic::Request<ReadFrameRequest>,
-    ) -> anyhow::Result<tonic::Response<ReadFrameResponse>, tonic::Status> {
+        request: tonic::Request<rpc::ReadFrameRequest>,
+    ) -> anyhow::Result<tonic::Response<rpc::ReadFrameResponse>, tonic::Status> {
         let request = request.into_inner();
         let frame_no = request.frame_no;
         let namespace = request.namespace;
@@ -111,37 +105,37 @@ impl Storage for Service {
             .read_frame(&namespace, frame_no)
             .await
         {
-            Ok(Response::new(ReadFrameResponse {
+            Ok(Response::new(rpc::ReadFrameResponse {
                 frame: Some(data.clone().into()),
             }))
         } else {
             error!("read_frame() failed for frame_no={}", frame_no);
-            Ok(Response::new(ReadFrameResponse { frame: None }))
+            Ok(Response::new(rpc::ReadFrameResponse { frame: None }))
         }
     }
 
     async fn db_size(
         &self,
-        request: tonic::Request<DbSizeRequest>,
-    ) -> anyhow::Result<tonic::Response<DbSizeResponse>, tonic::Status> {
+        request: tonic::Request<rpc::DbSizeRequest>,
+    ) -> anyhow::Result<tonic::Response<rpc::DbSizeResponse>, tonic::Status> {
         let size = self.db_size.load(std::sync::atomic::Ordering::SeqCst) as u64;
-        Ok(Response::new(DbSizeResponse { size }))
+        Ok(Response::new(rpc::DbSizeResponse { size }))
     }
 
     async fn frames_in_wal(
         &self,
-        request: Request<FramesInWalRequest>,
-    ) -> std::result::Result<Response<FramesInWalResponse>, Status> {
+        request: Request<rpc::FramesInWalRequest>,
+    ) -> std::result::Result<Response<rpc::FramesInWalResponse>, Status> {
         let namespace = request.into_inner().namespace;
-        Ok(Response::new(FramesInWalResponse {
+        Ok(Response::new(rpc::FramesInWalResponse {
             count: self.store.lock().await.frames_in_wal(&namespace).await,
         }))
     }
 
     async fn frame_page_num(
         &self,
-        request: Request<FramePageNumRequest>,
-    ) -> std::result::Result<Response<FramePageNumResponse>, Status> {
+        request: Request<rpc::FramePageNumRequest>,
+    ) -> std::result::Result<Response<rpc::FramePageNumResponse>, Status> {
         let request = request.into_inner();
         let frame_no = request.frame_no;
         let namespace = request.namespace;
@@ -152,20 +146,20 @@ impl Storage for Service {
             .frame_page_no(&namespace, frame_no)
             .await
         {
-            Ok(Response::new(FramePageNumResponse { page_no }))
+            Ok(Response::new(rpc::FramePageNumResponse { page_no }))
         } else {
             error!("frame_page_num() failed for frame_no={}", frame_no);
-            Ok(Response::new(FramePageNumResponse { page_no: 0 }))
+            Ok(Response::new(rpc::FramePageNumResponse { page_no: 0 }))
         }
     }
 
     async fn destroy(
         &self,
-        request: tonic::Request<DestroyRequest>,
-    ) -> anyhow::Result<tonic::Response<DestroyResponse>, tonic::Status> {
+        request: tonic::Request<rpc::DestroyRequest>,
+    ) -> anyhow::Result<tonic::Response<rpc::DestroyResponse>, tonic::Status> {
         trace!("destroy()");
         let namespace = request.into_inner().namespace;
         self.store.lock().await.destroy(&namespace).await;
-        Ok(Response::new(DestroyResponse {}))
+        Ok(Response::new(rpc::DestroyResponse {}))
     }
 }

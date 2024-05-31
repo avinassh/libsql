@@ -1,30 +1,18 @@
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
+use crate::fdb_store::FDBFrameStore;
+use crate::redis_store::RedisFrameStore;
 use anyhow::Result;
-use bytes::Bytes;
 use clap::Parser;
-use libsql_storage::rpc::storage_server::{Storage, StorageServer};
-use libsql_storage::rpc::{
-    DbSizeRequest, DbSizeResponse, DestroyRequest, DestroyResponse, FindFrameRequest,
-    FindFrameResponse, FramePageNumRequest, FramePageNumResponse, FramesInWalRequest,
-    FramesInWalResponse, InsertFramesRequest, InsertFramesResponse, ReadFrameRequest,
-    ReadFrameResponse,
-};
+use libsql_storage::rpc::storage_server::StorageServer;
 use libsql_storage_server::version::Version;
-use redis::{Client, Commands, RedisResult};
-use serde;
+use redis::Client;
 use service::Service;
 use tokio::sync::Mutex;
-use tonic::{transport::Server, Request, Response, Status};
-use tracing::{error, trace};
+use tonic::transport::Server;
+use tracing::trace;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-use crate::fdb_store::FDBFrameStore;
-use crate::memory_store::InMemFrameStore;
-use crate::redis_store::RedisFrameStore;
-use crate::store::FrameStore;
 
 mod fdb_store;
 mod memory_store;
@@ -41,12 +29,13 @@ enum StorageType {
 
 #[derive(Debug, Parser)]
 #[command(name = "libsql-storage-server")]
-#[command(about = "libSQL storage server", version = Version::default(), long_about = None)]
+#[command(about = "libSQL Storage Server", version = Version::default(), long_about = None)]
 struct Cli {
     /// The address and port the storage RPC protocol listens to. Example: `127.0.0.1:5002`.
     #[clap(long, env = "LIBSQL_STORAGE_LISTEN_ADDR", default_value = "[::]:5002")]
     listen_addr: SocketAddr,
 
+    /// The type of storage backend to use. Example: `redis`
     #[clap(value_enum, long, default_value = "in-memory")]
     storage_type: StorageType,
 }
@@ -61,18 +50,28 @@ async fn main() -> Result<()> {
     .expect("setting default subscriber failed");
 
     let args = Cli::parse();
-    // export REDIS_ADDR=http://libsql-storage-server.internal:5002
-    let redis_addr = std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
-    let client = Client::open(redis_addr).unwrap();
-    let service = Service::with_store(Arc::new(Mutex::new(FDBFrameStore::new())));
+    let service = match args.storage_type {
+        StorageType::Redis => {
+            // export REDIS_ADDR=http://libsql-storage-server.internal:5002
+            let redis_addr =
+                std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
+            let client = Client::open(redis_addr).unwrap();
+            Service::with_store(Arc::new(Mutex::new(RedisFrameStore::new(client))))
+        }
+        StorageType::FoundationDB => {
+            Service::with_store(Arc::new(Mutex::new(FDBFrameStore::new())))
+        }
+        _ => Service::new(),
+    };
+
     trace!(
-        "(trace) Starting libSQL storage server on {}",
+        "Starting libSQL storage server (with type {:?}) on {}",
+        args.storage_type,
         args.listen_addr
     );
     Server::builder()
         .add_service(StorageServer::new(service))
         .serve(args.listen_addr)
         .await?;
-
     Ok(())
 }
