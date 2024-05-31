@@ -1,5 +1,5 @@
-use crate::FrameData;
 use async_trait::async_trait;
+use bytes::Bytes;
 
 #[async_trait]
 pub trait FrameStore: Send + Sync {
@@ -10,4 +10,10 @@ pub trait FrameStore: Send + Sync {
     async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u64>;
     async fn frames_in_wal(&self, namespace: &str) -> u64;
     async fn destroy(&mut self, namespace: &str);
+}
+
+#[derive(Default)]
+pub struct FrameData {
+    pub(crate) page_no: u64,
+    pub(crate) data: Bytes,
 }

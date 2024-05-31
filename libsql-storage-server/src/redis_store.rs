@@ -1,5 +1,5 @@
+use crate::store::FrameData;
 use crate::store::FrameStore;
-use crate::FrameData;
 use async_trait::async_trait;
 use bytes::Bytes;
 use redis::{Client, Commands, RedisResult};
@@ -26,7 +26,7 @@ impl FrameStore for RedisFrameStore {
         let (max_frame_no,): (u64,) =
             redis::transaction(&mut con, &[&max_frame_key], |con, pipe| {
                 let result: RedisResult<u64> = con.get(max_frame_key.clone());
-                if result.is_err() && !crate::is_nil_response(result.as_ref().err().unwrap()) {
+                if result.is_err() && !is_nil_response(result.as_ref().err().unwrap()) {
                     return Err(result.err().unwrap());
                 }
                 let max_frame_no = result.unwrap_or(0) + 1;
@@ -63,7 +63,7 @@ impl FrameStore for RedisFrameStore {
         match result {
             Ok(frame) => Some(Bytes::from(frame)),
             Err(e) => {
-                if !crate::is_nil_response(&e) {
+                if !is_nil_response(&e) {
                     error!(
                         "read_frame() failed for frame_no={} with err={}",
                         frame_no, e
@@ -81,7 +81,7 @@ impl FrameStore for RedisFrameStore {
         match frame_no {
             Ok(frame_no) => Some(frame_no),
             Err(e) => {
-                if !crate::is_nil_response(&e) {
+                if !is_nil_response(&e) {
                     error!("find_frame() failed for page_no={} with err={}", page_no, e);
                 }
                 None
@@ -96,7 +96,7 @@ impl FrameStore for RedisFrameStore {
         match result {
             Ok(page_no) => Some(page_no),
             Err(e) => {
-                if !crate::is_nil_response(&e) {
+                if !is_nil_response(&e) {
                     error!(
                         "frame_page_no() failed for frame_no={} with err={}",
                         frame_no, e
@@ -112,7 +112,7 @@ impl FrameStore for RedisFrameStore {
         let mut con = self.client.get_connection().unwrap();
         let result = con.get::<String, u64>(max_frame_key.clone());
         result.unwrap_or_else(|e| {
-            if !crate::is_nil_response(&e) {
+            if !is_nil_response(&e) {
                 error!("frames_in_wal() failed with err={}", e);
             }
             0
@@ -125,4 +125,8 @@ impl FrameStore for RedisFrameStore {
         // send a FLUSHALL request
         let _: () = redis::cmd("FLUSHALL").query(&mut con).unwrap();
     }
+}
+
+fn is_nil_response(e: &redis::RedisError) -> bool {
+    e.to_string().contains("response was nil")
 }
