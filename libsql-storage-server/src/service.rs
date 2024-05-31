@@ -1,9 +1,10 @@
-use crate::memory_store::InMemFrameStore;
-use crate::store::{FrameData, FrameStore};
-use libsql_storage::rpc;
-use libsql_storage::rpc::storage_server::Storage;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+
+use crate::memory_store::InMemFrameStore;
+use crate::store::FrameStore;
+use libsql_storage::rpc;
+use libsql_storage::rpc::storage_server::Storage;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 use tracing::{error, trace};
@@ -32,26 +33,13 @@ impl Service {
 impl Storage for Service {
     async fn insert_frames(
         &self,
-        request: tonic::Request<rpc::InsertFramesRequest>,
-    ) -> anyhow::Result<tonic::Response<rpc::InsertFramesResponse>, tonic::Status> {
-        trace!("insert_frames()");
+        request: Request<rpc::InsertFramesRequest>,
+    ) -> anyhow::Result<Response<rpc::InsertFramesResponse>, Status> {
         let mut num_frames = 0;
         let mut store = self.store.lock().await;
-        trace!("insert_frames() got lock");
         let request = request.into_inner();
         let namespace = request.namespace;
-        let frames = request.frames.into_iter().map(|frame| FrameData {
-            page_no: frame.page_no,
-            data: frame.data.into(),
-        });
-        let all_data: Vec<u8> = frames
-            .clone()
-            .map(|f| f.data.clone().to_vec())
-            .flatten()
-            .collect();
-        trace!("insert_frames() got frames (bytes): {:?}", all_data.len());
-        trace!("insert_frames() got frames: {:?}", frames.len());
-        for frame in frames {
+        for frame in request.frames.into_iter() {
             trace!(
                 "inserted for page {} frame {}",
                 frame.page_no,
@@ -68,8 +56,8 @@ impl Storage for Service {
 
     async fn find_frame(
         &self,
-        request: tonic::Request<rpc::FindFrameRequest>,
-    ) -> anyhow::Result<tonic::Response<rpc::FindFrameResponse>, tonic::Status> {
+        request: Request<rpc::FindFrameRequest>,
+    ) -> Result<Response<rpc::FindFrameResponse>, Status> {
         let request = request.into_inner();
         let page_no = request.page_no;
         let namespace = request.namespace;
@@ -92,8 +80,8 @@ impl Storage for Service {
 
     async fn read_frame(
         &self,
-        request: tonic::Request<rpc::ReadFrameRequest>,
-    ) -> anyhow::Result<tonic::Response<rpc::ReadFrameResponse>, tonic::Status> {
+        request: Request<rpc::ReadFrameRequest>,
+    ) -> Result<Response<rpc::ReadFrameResponse>, Status> {
         let request = request.into_inner();
         let frame_no = request.frame_no;
         let namespace = request.namespace;
@@ -116,8 +104,8 @@ impl Storage for Service {
 
     async fn db_size(
         &self,
-        request: tonic::Request<rpc::DbSizeRequest>,
-    ) -> anyhow::Result<tonic::Response<rpc::DbSizeResponse>, tonic::Status> {
+        _request: Request<rpc::DbSizeRequest>,
+    ) -> Result<Response<rpc::DbSizeResponse>, Status> {
         let size = self.db_size.load(std::sync::atomic::Ordering::SeqCst) as u64;
         Ok(Response::new(rpc::DbSizeResponse { size }))
     }
@@ -125,7 +113,7 @@ impl Storage for Service {
     async fn frames_in_wal(
         &self,
         request: Request<rpc::FramesInWalRequest>,
-    ) -> std::result::Result<Response<rpc::FramesInWalResponse>, Status> {
+    ) -> Result<Response<rpc::FramesInWalResponse>, Status> {
         let namespace = request.into_inner().namespace;
         Ok(Response::new(rpc::FramesInWalResponse {
             count: self.store.lock().await.frames_in_wal(&namespace).await,
@@ -135,7 +123,7 @@ impl Storage for Service {
     async fn frame_page_num(
         &self,
         request: Request<rpc::FramePageNumRequest>,
-    ) -> std::result::Result<Response<rpc::FramePageNumResponse>, Status> {
+    ) -> Result<Response<rpc::FramePageNumResponse>, Status> {
         let request = request.into_inner();
         let frame_no = request.frame_no;
         let namespace = request.namespace;
@@ -155,8 +143,8 @@ impl Storage for Service {
 
     async fn destroy(
         &self,
-        request: tonic::Request<rpc::DestroyRequest>,
-    ) -> anyhow::Result<tonic::Response<rpc::DestroyResponse>, tonic::Status> {
+        request: Request<rpc::DestroyRequest>,
+    ) -> Result<Response<rpc::DestroyResponse>, Status> {
         trace!("destroy()");
         let namespace = request.into_inner().namespace;
         self.store.lock().await.destroy(&namespace).await;

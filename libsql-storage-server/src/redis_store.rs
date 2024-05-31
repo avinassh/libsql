@@ -56,7 +56,7 @@ impl FrameStore for RedisFrameStore {
         max_frame_no
     }
 
-    async fn read_frame(&self, namespace: &str, frame_no: u64) -> Option<bytes::Bytes> {
+    async fn read_frame(&self, namespace: &str, frame_no: u64) -> Option<Bytes> {
         let frame_key = format!("f/{}/{}", namespace, frame_no);
         let mut con = self.client.get_connection().unwrap();
         let result = con.hget::<String, &str, Vec<u8>>(frame_key.clone(), "f");
@@ -119,7 +119,7 @@ impl FrameStore for RedisFrameStore {
         })
     }
 
-    async fn destroy(&mut self, namespace: &str) {
+    async fn destroy(&mut self, _namespace: &str) {
         // remove all the keys in redis
         let mut con = self.client.get_connection().unwrap();
         // send a FLUSHALL request

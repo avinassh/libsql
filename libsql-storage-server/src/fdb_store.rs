@@ -8,13 +8,13 @@ use foundationdb::Transaction;
 use tracing::error;
 
 pub struct FDBFrameStore {
-    network: NetworkAutoStop,
+    _network: NetworkAutoStop,
 }
 
 impl FDBFrameStore {
     pub fn new() -> Self {
-        let network = unsafe { foundationdb::boot() };
-        Self { network }
+        let _network = unsafe { foundationdb::boot() };
+        Self { _network }
     }
 
     async fn get_max_frame_no(&self, txn: &Transaction, namespace: &str) -> u64 {
@@ -149,5 +149,5 @@ impl FrameStore for FDBFrameStore {
         self.get_max_frame_no(&txn, namespace).await
     }
 
-    async fn destroy(&mut self, namespace: &str) {}
+    async fn destroy(&mut self, _namespace: &str) {}
 }

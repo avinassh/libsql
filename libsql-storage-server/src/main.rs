@@ -1,3 +1,9 @@
+mod fdb_store;
+mod memory_store;
+mod redis_store;
+mod service;
+mod store;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -13,12 +19,6 @@ use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tracing::trace;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-mod fdb_store;
-mod memory_store;
-mod redis_store;
-mod service;
-mod store;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum StorageType {
