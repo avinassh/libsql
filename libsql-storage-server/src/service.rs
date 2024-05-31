@@ -34,7 +34,7 @@ impl Storage for Service {
     async fn insert_frames(
         &self,
         request: Request<rpc::InsertFramesRequest>,
-    ) -> anyhow::Result<Response<rpc::InsertFramesResponse>, Status> {
+    ) -> Result<Response<rpc::InsertFramesResponse>, Status> {
         let mut num_frames = 0;
         let mut store = self.store.lock().await;
         let request = request.into_inner();
