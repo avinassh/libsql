@@ -5,7 +5,6 @@ mod service;
 mod store;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use crate::fdb_store::FDBFrameStore;
 use crate::redis_store::RedisFrameStore;
@@ -15,7 +14,6 @@ use libsql_storage::rpc::storage_server::StorageServer;
 use libsql_storage_server::version::Version;
 use redis::Client;
 use service::Service;
-use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tracing::trace;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};

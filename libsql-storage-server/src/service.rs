@@ -1,12 +1,9 @@
 use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
 
 use crate::memory_store::InMemFrameStore;
-use crate::service;
 use crate::store::FrameStore;
 use libsql_storage::rpc;
 use libsql_storage::rpc::storage_server::Storage;
-use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 use tracing::{error, trace};
 
