@@ -321,7 +321,12 @@ where
             move || -> crate::Result<_> {
                 let manager = ManagedConnectionWalWrapper::new(connection_manager);
                 let id = manager.id();
-                let durable_wal = DurableWalManager::new(lock_manager);
+
+                // // connect to external storage server
+                // // export LIBSQL_STORAGE_SERVER_ADDR=http://libsql-storage-server.internal:5002
+                let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
+                    .unwrap_or("http://127.0.0.1:5002".to_string());
+                let durable_wal = DurableWalManager::new(lock_manager, address);
                 let wal = durable_wal.wrap(manager).wrap(wal_wrapper);
 
                 let conn = Connection::new(

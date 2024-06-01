@@ -22,14 +22,25 @@ pub mod rpc {
 // - no multi tenancy, uses `default` namespace
 // - txn can read new frames after it started (since there are no read locks)
 
+#[derive(Clone, Default)]
+pub struct DurableWalConfig {
+    storage_server_address: String,
+}
+
 #[derive(Clone)]
 pub struct DurableWalManager {
     lock_manager: Arc<Mutex<LockManager>>,
+    config: DurableWalConfig,
 }
 
 impl DurableWalManager {
-    pub fn new(lock_manager: Arc<Mutex<LockManager>>) -> Self {
-        Self { lock_manager }
+    pub fn new(lock_manager: Arc<Mutex<LockManager>>, storage_server_address: String) -> Self {
+        Self {
+            lock_manager,
+            config: DurableWalConfig {
+                storage_server_address,
+            },
+        }
     }
 }
 
@@ -53,7 +64,11 @@ impl WalManager for DurableWalManager {
         trace!("DurableWalManager::open(db_path: {})", db_path);
         // TODO: use the actual namespace uuid from the connection
         let namespace = "default".to_string();
-        Ok(DurableWal::new(namespace, self.lock_manager.clone()))
+        Ok(DurableWal::new(
+            namespace,
+            self.config.clone(),
+            self.lock_manager.clone(),
+        ))
     }
 
     fn close(
@@ -98,7 +113,11 @@ pub struct DurableWal {
 }
 
 impl DurableWal {
-    fn new(namespace: String, lock_manager: Arc<Mutex<LockManager>>) -> Self {
+    fn new(
+        namespace: String,
+        config: DurableWalConfig,
+        lock_manager: Arc<Mutex<LockManager>>,
+    ) -> Self {
         let (_runtime, rt) = match tokio::runtime::Handle::try_current() {
             Ok(h) => (None, h),
             Err(_) => {
@@ -107,11 +126,7 @@ impl DurableWal {
                 (Some(rt), handle)
             }
         };
-        // connect to external storage server
-        // export LIBSQL_STORAGE_SERVER_ADDR=http://libsql-storage-server.internal:5002
-        let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
-            .unwrap_or("http://127.0.0.1:5002".to_string());
-        let client = StorageClient::connect(address);
+        let client = StorageClient::connect(config.storage_server_address);
         let client = tokio::task::block_in_place(|| rt.block_on(client)).unwrap();
         let page_frames = SieveCache::new(1000).unwrap();
 
