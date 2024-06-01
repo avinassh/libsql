@@ -56,11 +56,9 @@ async fn main() -> Result<()> {
             let redis_addr =
                 std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
             let client = Client::open(redis_addr).unwrap();
-            Service::with_store(Arc::new(Mutex::new(RedisFrameStore::new(client))))
+            Service::with_store(Box::new(RedisFrameStore::new(client)))
         }
-        StorageType::FoundationDB => {
-            Service::with_store(Arc::new(Mutex::new(FDBFrameStore::new())))
-        }
+        StorageType::FoundationDB => Service::with_store(Box::new(FDBFrameStore::new())),
         _ => Service::new(),
     };
 

@@ -17,7 +17,7 @@ impl RedisFrameStore {
 
 #[async_trait]
 impl FrameStore for RedisFrameStore {
-    async fn insert_frame(&mut self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64 {
+    async fn insert_frame(&self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
 
         let mut con = self.client.get_connection().unwrap();
@@ -48,7 +48,7 @@ impl FrameStore for RedisFrameStore {
         max_frame_no
     }
 
-    async fn insert_frames(&mut self, namespace: &str, frames: Vec<FrameData>) -> u64 {
+    async fn insert_frames(&self, namespace: &str, frames: Vec<FrameData>) -> u64 {
         let mut max_frame_no = 0;
         for f in frames {
             max_frame_no = self.insert_frame(namespace, f.page_no, f.data).await;
@@ -119,7 +119,7 @@ impl FrameStore for RedisFrameStore {
         })
     }
 
-    async fn destroy(&mut self, _namespace: &str) {
+    async fn destroy(&self, _namespace: &str) {
         // remove all the keys in redis
         let mut con = self.client.get_connection().unwrap();
         // send a FLUSHALL request
