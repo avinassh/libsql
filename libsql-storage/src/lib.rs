@@ -89,7 +89,7 @@ impl WalManager for DurableWalManager {
 pub struct DurableWal {
     namespace: String,
     conn_id: String,
-    client: parking_lot::Mutex<StorageClient<Channel>>,
+    client: StorageClient<Channel>,
     frames_cache: SieveCache<std::num::NonZeroU64, Vec<u8>>,
     write_cache: BTreeMap<u32, rpc::Frame>,
     lock_manager: Arc<Mutex<LockManager>>,
@@ -118,7 +118,7 @@ impl DurableWal {
         Self {
             namespace,
             conn_id: uuid::Uuid::new_v4().to_string(),
-            client: parking_lot::Mutex::new(client),
+            client,
             frames_cache: page_frames,
             write_cache: BTreeMap::new(),
             lock_manager,
@@ -137,7 +137,7 @@ impl DurableWal {
             page_no: page_no.get() as u64,
             max_frame_no: 0,
         };
-        let mut binding = self.client.lock();
+        let mut binding = self.client.clone();
         let resp = binding.find_frame(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         let frame_no = resp
@@ -152,7 +152,7 @@ impl DurableWal {
         let req = rpc::FramesInWalRequest {
             namespace: self.namespace.clone(),
         };
-        let mut binding = self.client.lock();
+        let mut binding = self.client.clone();
         let resp = binding.frames_in_wal(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         let count = resp.into_inner().count;
@@ -226,7 +226,7 @@ impl Wal for DurableWal {
             namespace: self.namespace.clone(),
             frame_no: frame_no.get(),
         };
-        let mut binding = self.client.lock();
+        let mut binding = self.client.clone();
         let resp = binding.read_frame(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
         let frame = resp.into_inner().frame.unwrap();
@@ -323,7 +323,7 @@ impl Wal for DurableWal {
             max_frame_no: 0,
         };
         self.write_cache.clear();
-        let mut binding = self.client.lock();
+        let mut binding = self.client.clone();
         trace!("sending DurableWal::insert_frames() {:?}", req.frames.len());
         let resp = binding.insert_frames(req);
         let resp = tokio::task::block_in_place(|| self.rt.block_on(resp)).unwrap();
