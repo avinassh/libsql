@@ -20,6 +20,7 @@ members = [
   "xtask", "libsql-hrana",
   "libsql-wal",
   "libsql-storage",
+  "libsql-storage-server",
 ]
 
 exclude = [
