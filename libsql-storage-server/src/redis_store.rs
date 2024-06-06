@@ -10,14 +10,15 @@ pub struct RedisFrameStore {
 }
 
 impl RedisFrameStore {
-    pub fn new(client: Client) -> Self {
+    pub fn new(redis_addr: String) -> Self {
+        let client = Client::open(redis_addr).unwrap();
         Self { client }
     }
 }
 
 #[async_trait]
 impl FrameStore for RedisFrameStore {
-    async fn insert_frame(&self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64 {
+    async fn insert_frame(&self, namespace: &str, page_no: u32, frame: bytes::Bytes) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
 
         let mut con = self.client.get_connection().unwrap();
@@ -35,7 +36,7 @@ impl FrameStore for RedisFrameStore {
 
                 pipe.hset::<String, &str, Vec<u8>>(frame_key.clone(), "f", frame.to_vec())
                     .ignore()
-                    .hset::<String, &str, u64>(frame_key.clone(), "p", page_no)
+                    .hset::<String, &str, u32>(frame_key.clone(), "p", page_no)
                     .ignore()
                     .set::<String, u64>(page_key, max_frame_no)
                     .ignore()
@@ -74,7 +75,7 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    async fn find_frame(&self, namespace: &str, page_no: u64) -> Option<u64> {
+    async fn find_frame(&self, namespace: &str, page_no: u32) -> Option<u64> {
         let page_key = format!("p/{}/{}", namespace, page_no);
         let mut con = self.client.get_connection().unwrap();
         let frame_no = con.get::<String, u64>(page_key.clone());
@@ -89,10 +90,10 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u64> {
+    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u32> {
         let frame_key = format!("f/{}/{}", namespace, frame_no);
         let mut con = self.client.get_connection().unwrap();
-        let result = con.hget::<String, &str, u64>(frame_key.clone(), "p");
+        let result = con.hget::<String, &str, u32>(frame_key.clone(), "p");
         match result {
             Ok(page_no) => Some(page_no),
             Err(e) => {

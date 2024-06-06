@@ -52,7 +52,7 @@ impl FDBFrameStore {
 
 #[async_trait]
 impl FrameStore for FDBFrameStore {
-    async fn insert_frame(&self, namespace: &str, page_no: u64, frame: bytes::Bytes) -> u64 {
+    async fn insert_frame(&self, namespace: &str, page_no: u32, frame: bytes::Bytes) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
@@ -108,7 +108,7 @@ impl FrameStore for FDBFrameStore {
         None
     }
 
-    async fn find_frame(&self, namespace: &str, page_no: u64) -> Option<u64> {
+    async fn find_frame(&self, namespace: &str, page_no: u32) -> Option<u64> {
         let page_key = format!("{}/p/{}", namespace, page_no);
 
         let db = foundationdb::Database::default().unwrap();
@@ -127,12 +127,12 @@ impl FrameStore for FDBFrameStore {
         Some(frame_no)
     }
 
-    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u64> {
+    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u32> {
         let frame_key = format!("{}/f/{}/p", namespace, frame_no);
 
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
-        let page_no: u64 = unpack(
+        let page_no: u32 = unpack(
             &txn.get(&frame_key.as_bytes(), true)
                 .await
                 .expect("get failed")

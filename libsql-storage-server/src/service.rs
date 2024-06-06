@@ -20,7 +20,7 @@ impl Service {
         }
     }
 
-    #[allow(dead_code)]
+
     pub fn with_store(store: Box<dyn FrameStore + Send + Sync>) -> Self {
         Self {
             store,

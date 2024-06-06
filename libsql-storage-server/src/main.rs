@@ -1,19 +1,19 @@
+#[cfg(feature = "foundation-db")]
 mod fdb_store;
 mod memory_store;
 mod redis_store;
 mod service;
 mod store;
 
-use std::net::SocketAddr;
-
+#[cfg(feature = "foundation-db")]
 use crate::fdb_store::FDBFrameStore;
 use crate::redis_store::RedisFrameStore;
 use anyhow::Result;
 use clap::Parser;
 use libsql_storage::rpc::storage_server::StorageServer;
 use libsql_storage_server::version::Version;
-use redis::Client;
 use service::Service;
+use std::net::SocketAddr;
 use tonic::transport::Server;
 use tracing::trace;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -52,10 +52,10 @@ async fn main() -> Result<()> {
         StorageType::Redis => {
             // export REDIS_ADDR=http://libsql-storage-server.internal:5002
             let redis_addr =
-                std::env::var("REDIS_ADDR").unwrap_or("redis://127.0.0.1/".to_string());
-            let client = Client::open(redis_addr).unwrap();
-            Service::with_store(Box::new(RedisFrameStore::new(client)))
+                std::env::var("REDIS_ADDRESS").unwrap_or("redis://127.0.0.1/".to_string());
+            Service::with_store(Box::new(RedisFrameStore::new(redis_addr)))
         }
+        #[cfg(feature = "foundation-db")]
         StorageType::FoundationDB => Service::with_store(Box::new(FDBFrameStore::new())),
         _ => Service::new(),
     };

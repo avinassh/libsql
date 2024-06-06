@@ -1,6 +1,7 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -25,9 +26,16 @@ use auth::Auth;
 use config::{
     AdminApiConfig, DbConfig, HeartbeatConfig, RpcClientConfig, RpcServerConfig, UserApiConfig,
 };
+use futures::future::ready;
+use futures::Future;
 use http::user::UserApi;
 use hyper::client::HttpConnector;
 use hyper_rustls::HttpsConnector;
+use libsql_storage::{DurableWalManager as Sqlite3WalManager, DurableWalManager};
+use libsql_sys::wal::either::Either;
+use libsql_wal::registry::WalRegistry;
+use libsql_wal::wal::LibsqlWalManager;
+use namespace::meta_store::MetaStoreHandle;
 use namespace::{NamespaceConfig, NamespaceName};
 use net::Connector;
 use once_cell::sync::Lazy;
@@ -40,6 +48,7 @@ use url::Url;
 use utils::services::idle_shutdown::IdleShutdownKicker;
 
 use self::config::MetaStoreConfig;
+use self::connection::connection_manager::InnerWalManager;
 use self::namespace::NamespaceStore;
 use self::net::AddrIncoming;
 use self::replication::script_backup_manager::{CommandHandler, ScriptBackupManager};
@@ -87,7 +96,7 @@ pub(crate) static BLOCKING_RT: Lazy<Runtime> = Lazy::new(|| {
 });
 
 type Result<T, E = Error> = std::result::Result<T, E>;
-type StatsSender = mpsc::Sender<(NamespaceName, Weak<Stats>)>;
+type StatsSender = mpsc::Sender<(NamespaceName, MetaStoreHandle, Weak<Stats>)>;
 
 pub struct Server<C = HttpConnector, A = AddrIncoming, D = HttpsConnector<HttpConnector>> {
     pub path: Arc<Path>,
@@ -106,6 +115,7 @@ pub struct Server<C = HttpConnector, A = AddrIncoming, D = HttpsConnector<HttpCo
     pub meta_store_config: MetaStoreConfig,
     pub max_concurrent_connections: usize,
     pub shutdown_timeout: std::time::Duration,
+    pub use_libsql_wal: bool,
 }
 
 impl<C, A, D> Default for Server<C, A, D> {
@@ -127,6 +137,7 @@ impl<C, A, D> Default for Server<C, A, D> {
             meta_store_config: Default::default(),
             max_concurrent_connections: 128,
             shutdown_timeout: Duration::from_secs(30),
+            use_libsql_wal: false,
         }
     }
 }
@@ -290,8 +301,7 @@ where
     fn spawn_monitoring_tasks(
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
-        stats_receiver: mpsc::Receiver<(NamespaceName, Weak<Stats>)>,
-        namespaces: NamespaceStore,
+        stats_receiver: mpsc::Receiver<(NamespaceName, MetaStoreHandle, Weak<Stats>)>,
     ) -> anyhow::Result<()> {
         match self.heartbeat_config {
             Some(ref config) => {
@@ -314,7 +324,6 @@ where
                             heartbeat_auth,
                             heartbeat_period,
                             stats_receiver,
-                            namespaces,
                         )
                         .await;
                         Ok(())
@@ -413,7 +422,11 @@ where
 
         let (scheduler_sender, scheduler_receiver) = mpsc::channel(128);
 
-        let (stats_sender, stats_receiver) = mpsc::channel(8);
+        let (stats_sender, stats_receiver) = mpsc::channel(1024);
+
+        // chose the wal backend
+        let (make_wal_manager, registry_shutdown) = self.configure_wal_manager()?;
+
         let ns_config = NamespaceConfig {
             db_kind,
             base_path: self.path.clone(),
@@ -433,6 +446,7 @@ where
             uri: uri.clone(),
             migration_scheduler: scheduler_sender.into(),
             lock_manager: Arc::new(Mutex::new(LockManager::new())),
+            make_wal_manager,
         };
 
         let (metastore_conn_maker, meta_store_wal_manager) =
@@ -463,7 +477,7 @@ where
             Ok(())
         });
 
-        self.spawn_monitoring_tasks(&mut join_set, stats_receiver, namespace_store.clone())?;
+        self.spawn_monitoring_tasks(&mut join_set, stats_receiver)?;
 
         // eagerly load the default namespace when namespaces are disabled
         if self.disable_namespaces && db_kind.is_primary() {
@@ -578,6 +592,7 @@ where
                     join_set.shutdown().await;
                     service_shutdown.notify_waiters();
                     namespace_store.shutdown().await?;
+                    registry_shutdown.await?;
 
                     Ok::<_, crate::Error>(())
                 };
@@ -611,5 +626,81 @@ where
         self.idle_shutdown_timeout.map(|d| {
             IdleShutdownKicker::new(d, self.initial_idle_shutdown_timeout, shutdown_notify)
         })
+    }
+
+    fn configure_wal_manager(
+        &self,
+    ) -> anyhow::Result<(
+        Arc<dyn Fn() -> InnerWalManager + Sync + Send + 'static>,
+        Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + Sync + 'static>>,
+    )> {
+        let wal_path = self.path.join("wals");
+
+        let enable_libsql_wal_test = {
+            let is_primary = self.rpc_server_config.is_some();
+            let is_libsql_wal_test = std::env::var("LIBSQL_WAL_TEST").is_ok();
+            is_primary && is_libsql_wal_test
+        };
+
+        let use_libsql_wal = self.use_libsql_wal || enable_libsql_wal_test;
+        if wal_path.try_exists()? && !use_libsql_wal {
+            anyhow::bail!("database was previously setup to use libsql-wal");
+        }
+
+        if use_libsql_wal {
+            if self.db_config.bottomless_replication.is_some() {
+                anyhow::bail!("bottomless not supported with libsql_wal");
+            }
+
+            if self.rpc_client_config.is_some() {
+                anyhow::bail!("lisbl wal not supported in replica mode");
+            }
+
+            let namespace_resolver = |path: &Path| {
+                NamespaceName::from_string(
+                    path.parent()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string(),
+                )
+                .unwrap()
+                .into()
+            };
+
+            let registry = Arc::new(WalRegistry::new(wal_path, namespace_resolver, ())?);
+
+            let wal = LibsqlWalManager::new(registry.clone());
+            let shutdown_notify = self.shutdown.clone();
+            let shutdown_fut = Box::pin(async move {
+                shutdown_notify.notified().await;
+                tokio::task::spawn_blocking(move || registry.shutdown())
+                    .await
+                    .unwrap()?;
+                Ok(())
+            });
+
+            tracing::info!("using libsql wal");
+            Ok((Arc::new(move || Either::B(wal.clone())), shutdown_fut))
+        } else {
+            tracing::info!("using sqlite3 wal");
+            // // connect to external storage server
+            // // export LIBSQL_STORAGE_SERVER_ADDR=http://libsql-storage-server.internal:5002
+            let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
+                .unwrap_or("http://127.0.0.1:5002".to_string());
+            let lock_manager = Arc::new(std::sync::Mutex::new(LockManager::new()));
+            // let durable_wal = Sqlite3WalManager::new(lock_manager, address);
+            Ok((
+                Arc::new(move || {
+                    Either::A(Sqlite3WalManager::new(
+                        lock_manager.clone(),
+                        address.clone(),
+                    ))
+                }),
+                Box::pin(ready(Ok(()))),
+            ))
+        }
     }
 }
