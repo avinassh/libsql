@@ -22,6 +22,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 enum StorageType {
     InMemory,
     Redis,
+    #[cfg(feature = "foundation-db")]
     FoundationDB,
 }
 

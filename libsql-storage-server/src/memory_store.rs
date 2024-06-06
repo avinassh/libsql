@@ -61,7 +61,7 @@ impl FrameStore for InMemFrameStore {
     }
 
     // given a page number, return the maximum frame for the page
-    async fn find_frame(&self, _namespace: &str, page_no: u32) -> Option<u64> {
+    async fn find_frame(&self, _namespace: &str, page_no: u32, _max_frame_no: u64) -> Option<u64> {
         self.inner
             .lock()
             .unwrap()

@@ -20,7 +20,6 @@ impl Service {
         }
     }
 
-
     pub fn with_store(store: Box<dyn FrameStore + Send + Sync>) -> Self {
         Self {
             store,
@@ -61,7 +60,11 @@ impl Storage for Service {
         let page_no = request.page_no;
         let namespace = request.namespace;
         trace!("find_frame(page_no={})", page_no);
-        if let Some(frame_no) = self.store.find_frame(&namespace, page_no).await {
+        if let Some(frame_no) = self
+            .store
+            .find_frame(&namespace, page_no, request.max_frame_no)
+            .await
+        {
             Ok(Response::new(rpc::FindFrameResponse {
                 frame_no: Some(frame_no),
             }))
