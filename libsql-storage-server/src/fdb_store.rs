@@ -1,4 +1,3 @@
-use crate::store::FrameData;
 use crate::store::FrameStore;
 use async_trait::async_trait;
 use foundationdb::api::NetworkAutoStop;
@@ -40,7 +39,7 @@ impl FDBFrameStore {
         namespace: &str,
         txn: &Transaction,
         frame_no: u64,
-        frame: FrameData,
+        frame: Frame,
     ) {
         let frame_data_key = format!("{}/f/{}/f", namespace, frame_no);
         let frame_page_key = format!("{}/f/{}/p", namespace, frame_no);
@@ -56,27 +55,7 @@ impl FDBFrameStore {
 
 #[async_trait]
 impl FrameStore for FDBFrameStore {
-    async fn insert_frame(&self, namespace: &str, page_no: u32, frame: bytes::Bytes) -> u64 {
-        let max_frame_key = format!("{}/max_frame_no", namespace);
-        let db = foundationdb::Database::default().unwrap();
-        let txn = db.create_trx().expect("unable to create transaction");
-        let frame_no = self.get_max_frame_no(&txn, namespace).await + 1;
-        self.insert_with_tx(
-            namespace,
-            &txn,
-            frame_no,
-            FrameData {
-                page_no,
-                data: frame,
-            },
-        )
-        .await;
-        txn.set(&max_frame_key.as_bytes(), &pack(&(frame_no)));
-        txn.commit().await.expect("commit failed");
-        frame_no
-    }
-
-    async fn insert_frames(&self, namespace: &str, max_frame_no: u64, frames: Vec<Frame>) -> u64 {
+    async fn insert_frames(&self, namespace: &str, _max_frame_no: u64, frames: Vec<Frame>) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
@@ -84,16 +63,7 @@ impl FrameStore for FDBFrameStore {
 
         for f in frames {
             frame_no += 1;
-            self.insert_with_tx(
-                namespace,
-                &txn,
-                frame_no,
-                FrameData {
-                    page_no: f.page_no,
-                    data: f.data.into(),
-                },
-            )
-            .await;
+            self.insert_with_tx(namespace, &txn, frame_no, f).await;
         }
         txn.set(&max_frame_key.as_bytes(), &pack(&(frame_no)));
         txn.commit().await.expect("commit failed");
