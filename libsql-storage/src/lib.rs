@@ -176,7 +176,12 @@ impl Wal for DurableWal {
         // - create a read lock
         // - save the current max_frame_no for this txn
         //
-        self.max_frame_no = self.db_size() as u64;
+        let rt = tokio::runtime::Handle::current();
+        let size = tokio::task::block_in_place(|| rt.block_on(self.frames_count()))
+            .try_into()
+            .unwrap();
+        trace!("DurableWal::db_size() => {}", size);
+        self.max_frame_no = size;
         Ok(true)
     }
 
