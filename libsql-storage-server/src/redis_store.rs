@@ -43,10 +43,9 @@ impl FrameStore for RedisFrameStore {
                         .set::<String, u64>(page_key, max_frame_no)
                         .ignore()
                         .set::<String, u64>(max_frame_key.clone(), max_frame_no)
-                        .ignore()
-                        .get(max_frame_key.clone());
+                        .ignore();
                 }
-                pipe.query(con)
+                pipe.get(max_frame_key.clone()).query(con)
             })
             .unwrap();
         max_frame_no
