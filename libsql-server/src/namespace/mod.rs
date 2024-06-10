@@ -48,6 +48,7 @@ use crate::{
 };
 
 pub use fork::ForkError;
+use libsql_storage::LockManager;
 
 use self::fork::{ForkTask, PointInTimeRestore};
 use self::meta_store::MetaStoreHandle;
@@ -372,6 +373,7 @@ impl Namespace {
             block_writes,
             resolve_attach_path,
             ns_config.make_wal_manager.clone(),
+            ns_config.lock_manager.clone(),
         )
         .await?
         .throttled(
@@ -759,6 +761,8 @@ pub struct NamespaceConfig {
     pub(crate) bottomless_replication: Option<bottomless::replicator::Options>,
     pub(crate) scripted_backup: Option<ScriptBackupManager>,
     pub(crate) migration_scheduler: SchedulerHandle,
+
+    pub(crate) lock_manager: Arc<std::sync::Mutex<LockManager>>,
     pub(crate) make_wal_manager: Arc<dyn Fn() -> InnerWalManager + Sync + Send + 'static>,
 }
 

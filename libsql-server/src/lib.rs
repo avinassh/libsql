@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use crate::connection::{Connection, MakeConnection};
 use crate::database::DatabaseKind;
@@ -31,8 +31,8 @@ use futures::Future;
 use http::user::UserApi;
 use hyper::client::HttpConnector;
 use hyper_rustls::HttpsConnector;
+use libsql_storage::{DurableWalManager as Sqlite3WalManager, DurableWalManager};
 use libsql_sys::wal::either::Either;
-use libsql_sys::wal::Sqlite3WalManager;
 use libsql_wal::registry::WalRegistry;
 use libsql_wal::wal::LibsqlWalManager;
 use namespace::meta_store::MetaStoreHandle;
@@ -61,6 +61,7 @@ pub mod rpc;
 pub mod version;
 
 pub use hrana::proto as hrana_proto;
+use libsql_storage::LockManager;
 
 mod database;
 mod error;
@@ -444,6 +445,7 @@ where
             channel: channel.clone(),
             uri: uri.clone(),
             migration_scheduler: scheduler_sender.into(),
+            lock_manager: Arc::new(Mutex::new(LockManager::new())),
             make_wal_manager,
         };
 
@@ -684,8 +686,19 @@ where
             Ok((Arc::new(move || Either::B(wal.clone())), shutdown_fut))
         } else {
             tracing::info!("using sqlite3 wal");
+            // // connect to external storage server
+            // // export LIBSQL_STORAGE_SERVER_ADDR=http://libsql-storage-server.internal:5002
+            let address = std::env::var("LIBSQL_STORAGE_SERVER_ADDR")
+                .unwrap_or("http://127.0.0.1:5002".to_string());
+            let lock_manager = Arc::new(std::sync::Mutex::new(LockManager::new()));
+            // let durable_wal = Sqlite3WalManager::new(lock_manager, address);
             Ok((
-                Arc::new(|| Either::A(Sqlite3WalManager::default())),
+                Arc::new(move || {
+                    Either::A(Sqlite3WalManager::new(
+                        lock_manager.clone(),
+                        address.clone(),
+                    ))
+                }),
                 Box::pin(ready(Ok(()))),
             ))
         }

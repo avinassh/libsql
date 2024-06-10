@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use libsql_storage::{DurableWalManager, LockManager};
 use libsql_sys::wal::wrapper::{WrapWal, WrappedWal};
 use libsql_sys::wal::{BusyHandler, CheckpointCallback, Wal, WalManager};
 use libsql_sys::EncryptionConfig;
@@ -48,6 +49,7 @@ pub struct MakeLibSqlConn<W> {
     encryption_config: Option<EncryptionConfig>,
     block_writes: Arc<AtomicBool>,
     resolve_attach_path: ResolveNamespacePathFn,
+    lock_manager: Arc<std::sync::Mutex<LockManager>>,
     make_wal_manager: Arc<dyn Fn() -> InnerWalManager + Sync + Send + 'static>,
 }
 
@@ -70,6 +72,7 @@ where
         block_writes: Arc<AtomicBool>,
         resolve_attach_path: ResolveNamespacePathFn,
         make_wal_manager: Arc<dyn Fn() -> InnerWalManager + Sync + Send + 'static>,
+        lock_manager: Arc<std::sync::Mutex<LockManager>>,
     ) -> Result<Self> {
         let txn_timeout = config_store.get().txn_timeout.unwrap_or(TXN_TIMEOUT);
 
@@ -88,6 +91,7 @@ where
             block_writes,
             resolve_attach_path,
             connection_manager: ConnectionManager::new(txn_timeout),
+            lock_manager,
             make_wal_manager,
         };
 
@@ -144,6 +148,7 @@ where
             self.block_writes.clone(),
             self.resolve_attach_path.clone(),
             self.connection_manager.clone(),
+            self.lock_manager.clone(),
             self.make_wal_manager.clone(),
         )
         .await
@@ -318,6 +323,7 @@ where
         block_writes: Arc<AtomicBool>,
         resolve_attach_path: ResolveNamespacePathFn,
         connection_manager: ConnectionManager,
+        lock_manager: Arc<std::sync::Mutex<LockManager>>,
         make_wal: Arc<dyn Fn() -> InnerWalManager + Sync + Send + 'static>,
     ) -> crate::Result<Self> {
         let (conn, id) = tokio::task::spawn_blocking({
@@ -325,6 +331,7 @@ where
             move || -> crate::Result<_> {
                 let manager = ManagedConnectionWalWrapper::new(connection_manager);
                 let id = manager.id();
+
                 let wal = make_wal().wrap(manager).wrap(wal_wrapper);
 
                 let conn = Connection::new(

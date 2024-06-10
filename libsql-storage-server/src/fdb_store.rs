@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use foundationdb::api::NetworkAutoStop;
 use foundationdb::tuple::pack;
 use foundationdb::tuple::unpack;
-use foundationdb::Transaction;
+use foundationdb::{KeySelector, Transaction};
 use libsql_storage::rpc::Frame;
 use tracing::error;
 
@@ -13,6 +13,7 @@ pub struct FDBFrameStore {
 
 impl FDBFrameStore {
     pub fn new() -> Self {
+        println!("I was called");
         let _network = unsafe { foundationdb::boot() };
         Self { _network }
     }
@@ -43,10 +44,12 @@ impl FDBFrameStore {
         let frame_data_key = format!("{}/f/{}/f", namespace, frame_no);
         let frame_page_key = format!("{}/f/{}/p", namespace, frame_no);
         let page_key = format!("{}/p/{}", namespace, frame.page_no);
+        let page_frame_idx = format!("{}/pf/{}/{}", namespace, frame.page_no, frame_no);
 
         txn.set(&frame_data_key.as_bytes(), &frame.data);
         txn.set(&frame_page_key.as_bytes(), &pack(&frame.page_no));
         txn.set(&page_key.as_bytes(), &pack(&frame_no));
+        txn.set(&page_frame_idx.as_bytes(), &pack(&frame_no));
     }
 }
 
@@ -79,11 +82,33 @@ impl FrameStore for FDBFrameStore {
         None
     }
 
-    async fn find_frame(&self, namespace: &str, page_no: u32) -> Option<u64> {
-        let page_key = format!("{}/p/{}", namespace, page_no);
-
+    async fn find_frame(&self, namespace: &str, page_no: u32, max_frame_no: u64) -> Option<u64> {
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
+
+        let page_key = format!("{}/pf/{}/{}", namespace, page_no, max_frame_no);
+        let result = txn
+            .get(
+                KeySelector::last_less_or_equal(page_key.as_bytes()).key(),
+                false,
+            )
+            .await;
+        // if let Err(e) = result {
+        //     error!("get failed: {:?}", e);
+        //     return None;
+        // }
+        // if let Ok(None) = result {
+        //     error!("page not found (with max)");
+        //     return None;
+        // }
+        if let Ok(result) = result {
+            if let Some(frame_no) = result {
+                let frame_no: u64 = unpack(&frame_no).expect("failed to decode u64");
+                tracing::trace!("got the frame_no = {} (with max)", frame_no);
+            };
+        };
+
+        let page_key = format!("{}/p/{}", namespace, page_no);
 
         let result = txn.get(&page_key.as_bytes(), false).await;
         if let Err(e) = result {
@@ -95,6 +120,7 @@ impl FrameStore for FDBFrameStore {
             return None;
         }
         let frame_no: u64 = unpack(&result.unwrap().unwrap()).expect("failed to decode u64");
+        tracing::trace!("got the frame_no = {} (without max)", frame_no);
         Some(frame_no)
     }
 

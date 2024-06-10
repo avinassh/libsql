@@ -8,6 +8,7 @@ use libsql_replication::rpc::proxy::proxy_client::ProxyClient;
 use libsql_replication::rpc::proxy::{
     exec_req, exec_resp, ExecReq, ExecResp, StreamDescribeReq, StreamProgramReq,
 };
+use libsql_storage::LockManager;
 use libsql_sys::wal::wrapper::PassthroughWalWrapper;
 use libsql_sys::EncryptionConfig;
 use parking_lot::Mutex as PMutex;
@@ -78,6 +79,7 @@ impl MakeWriteProxyConn {
             Arc::new(AtomicBool::new(false)), // this is always false for write proxy
             resolve_attach_path,
             make_wal_manager,
+            Arc::new(std::sync::Mutex::new(LockManager::new())),
         )
         .await?;
 

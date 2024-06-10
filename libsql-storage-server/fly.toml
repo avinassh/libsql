@@ -1,0 +1,18 @@
+# fly deploy -c libsql-storage-server/fly.toml --dockerfile libsql-storage-server/Dockerfile
+
+app = 'libsql-storage-server'
+primary_region = 'ams'
+
+[build]
+
+[[services]]
+http_checks = []
+internal_port = 5002
+processes = ["app"]
+protocol = "tcp"
+script_checks = []
+[[services.ports]]
+port = 5002
+
+[[vm]]
+size = 'shared-cpu-1x'

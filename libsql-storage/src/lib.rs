@@ -110,6 +110,7 @@ pub struct DurableWal {
     frames_cache: SieveCache<std::num::NonZeroU64, Vec<u8>>,
     write_cache: BTreeMap<u32, rpc::Frame>,
     lock_manager: Arc<Mutex<LockManager>>,
+    max_frame_no: u64,
 }
 
 impl DurableWal {
@@ -129,6 +130,7 @@ impl DurableWal {
             frames_cache: page_frames,
             write_cache: BTreeMap::new(),
             lock_manager,
+            max_frame_no: 0,
         }
     }
 
@@ -141,7 +143,7 @@ impl DurableWal {
         let req = rpc::FindFrameRequest {
             namespace: self.namespace.clone(),
             page_no: page_no.get(),
-            max_frame_no: 0,
+            max_frame_no: self.max_frame_no,
         };
         let mut binding = self.client.clone();
         let resp = binding.find_frame(req).await.unwrap();
@@ -174,6 +176,12 @@ impl Wal for DurableWal {
         // - create a read lock
         // - save the current max_frame_no for this txn
         //
+        let rt = tokio::runtime::Handle::current();
+        let size = tokio::task::block_in_place(|| rt.block_on(self.frames_count()))
+            .try_into()
+            .unwrap();
+        trace!("DurableWal::db_size() => {}", size);
+        self.max_frame_no = size;
         Ok(true)
     }
 
@@ -337,7 +345,7 @@ impl Wal for DurableWal {
         let req = rpc::InsertFramesRequest {
             namespace: self.namespace.clone(),
             frames: self.write_cache.values().cloned().collect(),
-            max_frame_no: 0,
+            max_frame_no: self.max_frame_no,
         };
         self.write_cache.clear();
         let mut binding = self.client.clone();
