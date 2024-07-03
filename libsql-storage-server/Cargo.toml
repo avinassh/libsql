@@ -27,11 +27,19 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 async-trait = "0.1.80"
 serde = "1.0.203"
 thiserror = "1.0.61"
+libsql = { path = "../libsql/"}
+rand = "0.8.5"
+
 
 [features]
 foundation-db = ["foundationdb"]
 
 [dev-dependencies]
+criterion = { version = "0.5.1", features = ["async_futures", "async_tokio"] }
+
+[[bench]]
+name = "benchmarks"
+harness = false
 
 [build-dependencies]
 vergen = { version = "8", features = ["build", "git", "gitcl"] }
