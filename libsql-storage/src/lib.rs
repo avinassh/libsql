@@ -1,5 +1,6 @@
 mod local_cache;
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -184,6 +185,59 @@ impl DurableWal {
         trace!("DurableWal::frames_in_wal() = {}", count);
         count
     }
+
+    async fn do_insert_frames(
+        &self,
+        page_headers: &mut libsql_sys::wal::PageHeaders,
+    ) -> Result<usize> {
+        let mut frames: BTreeMap<u32, Frame> = self
+            .local_cache
+            .get_all_pages(self.conn_id.as_str())
+            .unwrap()
+            .into_iter()
+            .map(|(page_no, frame_data)| {
+                (
+                    page_no,
+                    Frame {
+                        frame_no: 0,
+                        page_no,
+                        data: frame_data.into(),
+                    },
+                )
+            })
+            .collect();
+
+        for (page_no, frame) in page_headers.iter() {
+            frames.insert(
+                page_no,
+                Frame {
+                    frame_no: 0,
+                    page_no,
+                    data: frame.into(),
+                },
+            );
+        }
+
+        // todo: assign numbers
+        let frames: Vec<Frame> = frames.into_iter().map(|(_, f)| f).collect();
+
+        let req = rpc::InsertFramesRequest {
+            namespace: self.namespace.to_string(),
+            frames: frames.clone(),
+            max_frame_no: self.max_frame_no,
+        };
+        let mut binding = self.client.clone();
+        trace!("sending DurableWal::insert_frames() {:?}", req.frames.len());
+        let resp = binding.insert_frames(req).await;
+        if let Err(e) = resp {
+            if e.code() == tonic::Code::Aborted {
+                return Err(rusqlite::ffi::Error::new(SQLITE_BUSY));
+            }
+            return Err(rusqlite::ffi::Error::new(SQLITE_ABORT));
+        }
+        let _ = self.local_cache.insert_frames(frames);
+        Ok(resp.unwrap().into_inner().num_frames as usize)
+    }
 }
 
 impl Wal for DurableWal {
@@ -347,47 +401,21 @@ impl Wal for DurableWal {
             error!("DurableWal::insert_frames() was called without acquiring lock!",);
             return Err(rusqlite::ffi::Error::new(SQLITE_ABORT));
         };
-        // add the updated frames from frame_headers to writeCache
-        for (page_no, frame) in page_headers.iter() {
-            self.local_cache
-                .insert_page(self.conn_id.as_str(), page_no, frame.into())
-                .expect("failed to insert in local cache");
-            // todo: update size after
-        }
-
         // check if the size_after is > 0, if so then mark txn as committed
-        if size_after <= 0 {
+        if size_after > 0 {
+            let resp =
+                tokio::task::block_in_place(|| rt.block_on(self.do_insert_frames(page_headers)));
             // todo: update new size
-            return Ok(0);
-        }
-
-        let frames: Vec<Frame> = self
-            .local_cache
-            .get_all_pages(self.conn_id.as_str())
-            .unwrap()
-            .into_iter()
-            .map(|(page_no, frame)| Frame {
-                page_no,
-                data: frame.into(),
-            })
-            .collect();
-
-        let req = rpc::InsertFramesRequest {
-            namespace: self.namespace.to_string(),
-            frames,
-            max_frame_no: self.max_frame_no,
-        };
-        let mut binding = self.client.clone();
-        trace!("sending DurableWal::insert_frames() {:?}", req.frames.len());
-        let resp = binding.insert_frames(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp));
-        if let Err(e) = resp {
-            if e.code() == tonic::Code::Aborted {
-                return Err(rusqlite::ffi::Error::new(SQLITE_BUSY));
+            resp
+        } else {
+            for (page_no, frame) in page_headers.iter() {
+                self.local_cache
+                    .insert_page(self.conn_id.as_str(), page_no, frame.into())
+                    .expect("failed to insert in local cache");
+                // todo: update size after
             }
-            return Err(rusqlite::ffi::Error::new(SQLITE_ABORT));
+            Ok(0)
         }
-        Ok(resp.unwrap().into_inner().num_frames as usize)
     }
 
     fn checkpoint(

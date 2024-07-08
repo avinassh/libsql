@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::rpc::Frame;
 use libsql_sys::rusqlite::{ffi, params, Connection, Error, Result};
 
 /// We use LocalCache to cache frames and transaction state. Each namespace gets its own cache
@@ -38,6 +40,8 @@ impl LocalCache {
                 frame_no INTEGER PRIMARY KEY NOT NULL,
                 data BLOB NOT NULL
             )",
+            // page_no INTEGER NOT NULL,
+            // cretae index (page_no, frame)
             [],
         )?;
 
@@ -64,6 +68,10 @@ impl LocalCache {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub fn insert_frames(&self, frames: Vec<Frame>) -> Result<()> {
+        Ok(())
     }
 
     pub fn get_frame(&self, frame_no: u64) -> Result<Option<Vec<u8>>> {
@@ -97,18 +105,19 @@ impl LocalCache {
         }
     }
 
-    pub fn get_all_pages(&self, txn_id: &str) -> Result<Vec<(u32, Vec<u8>)>> {
+    pub fn get_all_pages(&self, txn_id: &str) -> Result<BTreeMap<u32, Vec<u8>>> {
         let mut stmt = self
             .conn
             .prepare("SELECT page_no, data FROM transactions WHERE txn_id = ?1")?;
-        let pages: Result<Vec<(u32, Vec<u8>)>> = stmt
+        let pages: BTreeMap<u32, Vec<u8>> = stmt
             .query_map(params![txn_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|result| result.ok())
             .collect();
         self.conn.execute(
             "DELETE FROM transactions WHERE txn_id = ?1",
             params![txn_id],
         )?;
-        pages
+        Ok(pages)
     }
 }
 
