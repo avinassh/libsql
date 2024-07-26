@@ -15,20 +15,14 @@ pub struct FDBFrameStore {
 
 // Some information about how we map keys on Foundation DB.
 //
-// key: (<ns>, "f", <frame_no>, "f")                value: bytes (i.e. frame data)
-// key: (<ns>, "f", <frame_no>, "p")                value: u32 (stores page number)
+// key: (<ns>, "f", <frame_no>)                     value: (page_no, bytes (i.e. frame data)) tuple
 // key: (<ns>, "p", <page_no>)                      value: u64 (stores latest frame no of a page)
 // key: (<ns>, "pf", <page_no>, <frame_no>)         value: "" (empty string, this is used to keep track of page versions)
 // key: (<ns>, "max_frame_no")                      value: u64 (current max frame no of this ns)
 
 #[inline]
 fn frame_key(namespace: &str, frame_no: u64) -> Vec<u8> {
-    pack(&(namespace, "f", frame_no, "f"))
-}
-
-#[inline]
-fn frame_page_key(namespace: &str, frame_no: u64) -> Vec<u8> {
-    pack(&(namespace, "f", frame_no, "p"))
+    pack(&(namespace, "f", frame_no))
 }
 
 #[inline]
@@ -70,12 +64,11 @@ impl FDBFrameStore {
 
     async fn insert_with_tx(&self, namespace: &str, txn: &Transaction, frame: Frame) {
         let frame_data_key = frame_key(namespace, frame.frame_no);
-        let frame_page_key = frame_page_key(namespace, frame.frame_no);
+        let frame_data = pack(&(frame.page_no, frame.data));
         let page_key = page_key(namespace, frame.page_no);
         let page_frame_idx = page_index_key(namespace, frame.page_no, frame.frame_no);
 
-        txn.set(&frame_data_key, &frame.data);
-        txn.set(&frame_page_key, &pack(&frame.page_no));
+        txn.set(&frame_data_key, &frame_data);
         txn.set(&page_key, &pack(&frame.frame_no));
         txn.set(&page_frame_idx, &pack(&""));
     }
@@ -105,13 +98,16 @@ impl FrameStore for FDBFrameStore {
         Ok(frame_no)
     }
 
+    #[tracing::instrument(skip(self))]
     async fn read_frame(&self, namespace: &str, frame_no: u64) -> Option<bytes::Bytes> {
         let key = frame_key(namespace, frame_no);
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");
         let frame = txn.get(&key, false).await;
         if let Ok(Some(data)) = frame {
-            return Some(data.to_vec().into());
+            let unpacked: (u32, Vec<u8>) = unpack(&data.to_vec()).expect("failed to decode");
+            tracing::info!("extracted frame, page_no = {:?}", unpacked.0);
+            return Some(unpacked.1.into());
         }
         None
     }
