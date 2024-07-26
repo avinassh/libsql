@@ -144,20 +144,6 @@ impl FrameStore for FDBFrameStore {
         }
     }
 
-    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u32> {
-        let key = frame_page_key(namespace, frame_no);
-        let db = foundationdb::Database::default().unwrap();
-        let txn = db.create_trx().expect("unable to create transaction");
-        let page_no: u32 = unpack(
-            &txn.get(&key, true)
-                .await
-                .expect("get failed")
-                .expect("frame not found"),
-        )
-        .expect("failed to decode u64");
-        Some(page_no)
-    }
-
     async fn frames_in_wal(&self, namespace: &str) -> u64 {
         let db = foundationdb::Database::default().unwrap();
         let txn = db.create_trx().expect("unable to create transaction");

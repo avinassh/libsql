@@ -90,24 +90,6 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
-    async fn frame_page_no(&self, namespace: &str, frame_no: u64) -> Option<u32> {
-        let frame_key = format!("f/{}/{}", namespace, frame_no);
-        let mut con = self.client.get_connection().unwrap();
-        let result = con.hget::<String, &str, u32>(frame_key.clone(), "p");
-        match result {
-            Ok(page_no) => Some(page_no),
-            Err(e) => {
-                if !is_nil_response(&e) {
-                    error!(
-                        "frame_page_no() failed for frame_no={} with err={}",
-                        frame_no, e
-                    );
-                }
-                None
-            }
-        }
-    }
-
     async fn frames_in_wal(&self, namespace: &str) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let mut con = self.client.get_connection().unwrap();

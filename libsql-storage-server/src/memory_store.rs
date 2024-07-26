@@ -75,16 +75,6 @@ impl FrameStore for InMemFrameStore {
             .map(|frames| *frames.last().unwrap())
     }
 
-    // given a frame num, return the page number
-    async fn frame_page_no(&self, _namespace: &str, frame_no: u64) -> Option<u32> {
-        self.inner
-            .lock()
-            .unwrap()
-            .frames
-            .get(&frame_no)
-            .map(|frame| frame.page_no)
-    }
-
     async fn frames_in_wal(&self, _namespace: &str) -> u64 {
         self.inner.lock().unwrap().max_frame_no
     }

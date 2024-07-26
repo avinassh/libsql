@@ -53,15 +53,6 @@ message FramesInWALResponse {
   uint64 count = 1;
 }
 
-message FramePageNumRequest {
-  string namespace = 1;
-  uint64 frame_no = 2;
-}
-
-message FramePageNumResponse {
-  uint32 page_no = 1;
-}
-
 message DestroyRequest {
   string namespace = 1;
 }
@@ -84,6 +75,5 @@ service Storage {
   rpc ReadFrame(ReadFrameRequest) returns (ReadFrameResponse) {}
   rpc DbSize(DbSizeRequest) returns (DbSizeResponse) {}
   rpc FramesInWAL(FramesInWALRequest) returns (FramesInWALResponse) {}
-  rpc FramePageNum(FramePageNumRequest) returns (FramePageNumResponse) {}
   rpc Destroy(DestroyRequest) returns (DestroyResponse) {}
 }

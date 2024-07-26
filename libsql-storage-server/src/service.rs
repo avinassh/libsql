@@ -100,21 +100,6 @@ impl Storage for Service {
         }))
     }
 
-    async fn frame_page_num(
-        &self,
-        request: Request<rpc::FramePageNumRequest>,
-    ) -> Result<Response<rpc::FramePageNumResponse>, Status> {
-        let request = request.into_inner();
-        let frame_no = request.frame_no;
-        let namespace = request.namespace;
-        if let Some(page_no) = self.store.frame_page_no(&namespace, frame_no).await {
-            Ok(Response::new(rpc::FramePageNumResponse { page_no }))
-        } else {
-            error!("frame_page_num() failed for frame_no={}", frame_no);
-            Ok(Response::new(rpc::FramePageNumResponse { page_no: 0 }))
-        }
-    }
-
     async fn destroy(
         &self,
         request: Request<rpc::DestroyRequest>,
