@@ -345,14 +345,19 @@ impl Wal for DurableWal {
             return Ok(0);
         }
 
+        let mut frame_no = self.max_frame_no;
         let frames: Vec<Frame> = self
             .local_cache
             .get_all_pages(self.conn_id.as_str())
             .unwrap()
             .into_iter()
-            .map(|(page_no, frame)| Frame {
-                page_no,
-                data: frame.into(),
+            .map(|(page_no, frame)| {
+                frame_no += 1;
+                Frame {
+                    frame_no,
+                    page_no,
+                    data: frame.into(),
+                }
             })
             .collect();
 
