@@ -56,6 +56,14 @@ impl LocalCache {
             )",
             [],
         )?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY NOT NULL,
+                value INTEGER NOT NULL
+            )",
+            [],
+        )?;
         Ok(())
     }
 
@@ -72,15 +80,16 @@ impl LocalCache {
         }
     }
 
-    pub fn insert_frames(&mut self, frame_no: u64, frames: Vec<Frame>) -> Result<()> {
+    pub fn insert_frames(&mut self, max_frame_no: u64, frames: Vec<Frame>) -> Result<()> {
         let tx = self.conn.transaction().unwrap();
+        tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+                    params!["max_frame_no", max_frame_no])?;
         {
             let mut stmt =
                 tx.prepare("INSERT INTO frames (frame_no, page_no, data) VALUES (?1, ?2, ?3)")?;
-            let mut frame_no = frame_no;
             for f in frames {
-                frame_no += 1;
-                stmt.execute(params![frame_no, f.page_no, f.data]).unwrap();
+                stmt.execute(params![f.frame_no, f.page_no, f.data])
+                    .unwrap();
             }
         }
         tx.commit().unwrap();
@@ -92,7 +101,6 @@ impl LocalCache {
         page_no: u32,
         max_frame_no: u64,
     ) -> Result<Option<(u64, Option<Vec<u8>>)>> {
-        println!("query: {:?} {:?}", page_no, max_frame_no);
         let mut stmt = self.conn.prepare(
             "SELECT frame_no, data FROM frames WHERE page_no = ?1 AND frame_no <= ?2
         ORDER BY frame_no DESC LIMIT 1",
@@ -115,11 +123,11 @@ impl LocalCache {
     }
 
     pub fn get_max_frame_num(&self) -> Result<u64> {
-        match self
-            .conn
-            .query_row("SELECT MAX(frame_no) from frames", (), |row| {
-                row.get::<_, Option<u64>>(0)
-            }) {
+        match self.conn.query_row(
+            "SELECT value from meta where key = ?1",
+            params!["max_frame_no"],
+            |row| row.get::<_, Option<u64>>(0),
+        ) {
             Ok(Some(frame_no)) => Ok(frame_no),
             Ok(None) | Err(Error::QueryReturnedNoRows) => Ok(0),
             Err(e) => Err(e),

@@ -413,8 +413,9 @@ impl Wal for DurableWal {
             };
         }
         // TODO: fix parity with storage server frame num with local cache
+        let new_max_frame_no = self.max_frame_no + frames.len() as u64;
         self.local_cache
-            .insert_frames(self.max_frame_no, frames)
+            .insert_frames(new_max_frame_no, frames)
             .unwrap();
         Ok(resp.unwrap().into_inner().num_frames as usize)
     }
