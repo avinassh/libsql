@@ -75,7 +75,7 @@ impl WalManager for DurableWalManager {
         let namespace = self.resolver.resolve(db_path.as_ref());
         let cache_path = {
             let parent_dir = Path::new(db_path).parent().unwrap_or(Path::new("."));
-            &parent_dir.join(format!("{}_local_cache.db", namespace))
+            &parent_dir.join("local_cache.db")
         };
         let local_cache = LocalCache::new(cache_path).unwrap();
 
