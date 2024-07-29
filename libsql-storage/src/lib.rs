@@ -254,35 +254,49 @@ impl Wal for DurableWal {
             return Ok(());
         }
         // check if the frame exists in the local cache
-        if let Ok(Some(frame)) = self
+        match self
             .local_cache
             .get_frame_by_page(u32::from(page_no), self.max_frame_no)
         {
-            trace!(
-                "DurableWal::read_frame(page_no: {:?}) -- read cache hit",
-                page_no
-            );
-            buffer.copy_from_slice(&frame);
-            return Ok(());
+            Ok(Some((_, Some(data)))) => {
+                trace!(
+                    "DurableWal::read_frame(page_no: {:?}) -- read cache hit",
+                    page_no
+                );
+                buffer.copy_from_slice(&data);
+                Ok(())
+            }
+            Ok(Some((frame_no, None))) => {
+                trace!("DurableWal::read_frame(page_no: {:?}) -- frame found but no data, calling get_page", page_no);
+                let req = rpc::ReadFrameRequest {
+                    namespace: self.namespace.to_string(),
+                    frame_no,
+                };
+                let rt = tokio::runtime::Handle::current();
+                let mut binding = self.client.clone();
+                let resp =
+                    tokio::task::block_in_place(|| rt.block_on(binding.read_frame(req))).unwrap();
+                let frame = resp.into_inner().frame.unwrap();
+                buffer.copy_from_slice(&frame);
+                let _ = self
+                    .local_cache
+                    .insert_frame(frame_no.into(), u32::from(page_no), &frame);
+                Ok(())
+            }
+            Ok(None) | Err(_) => {
+                trace!("DurableWal::read_frame(page_no: {:?}) -- no frame found in cache or error, fetching from storage", page_no);
+                let rt = tokio::runtime::Handle::current();
+                let (frame_no, frame) =
+                    tokio::task::block_in_place(|| rt.block_on(self.get_frame_by_page_no(page_no)))
+                        .unwrap()
+                        .unwrap();
+                buffer.copy_from_slice(&frame);
+                let _ = self
+                    .local_cache
+                    .insert_frame(frame_no.into(), u32::from(page_no), &frame);
+                Ok(())
+            }
         }
-        let rt = tokio::runtime::Handle::current();
-        let frame_no =
-            tokio::task::block_in_place(|| rt.block_on(self.find_frame_by_page_no(page_no)))
-                .unwrap()
-                .unwrap();
-        let req = rpc::ReadFrameRequest {
-            namespace: self.namespace.to_string(),
-            frame_no: frame_no.get(),
-        };
-        let mut binding = self.client.clone();
-        let resp = binding.read_frame(req);
-        let resp = tokio::task::block_in_place(|| rt.block_on(resp)).unwrap();
-        let frame = resp.into_inner().frame.unwrap();
-        buffer.copy_from_slice(&frame);
-        let _ = self
-            .local_cache
-            .insert_frame(frame_no.into(), u32::from(page_no), &frame);
-        Ok(())
     }
 
     fn db_size(&self) -> u32 {

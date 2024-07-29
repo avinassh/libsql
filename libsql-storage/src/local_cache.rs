@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::rpc::Frame;
-use libsql_sys::rusqlite::{ffi, params, Connection, Error, Result};
+use libsql_sys::rusqlite::{ffi, params, types, Connection, Error, Result};
 
 /// We use LocalCache to cache frames and transaction state. Each namespace gets its own cache
 /// which is currently stored in a SQLite DB file, along with the main database file.
@@ -38,7 +38,7 @@ impl LocalCache {
             "CREATE TABLE IF NOT EXISTS frames (
                 frame_no INTEGER PRIMARY KEY NOT NULL,
                 page_no INTEGER NOT NULL,
-                data BLOB NOT NULL
+                data BLOB
             )",
             [],
         )?;
@@ -87,15 +87,30 @@ impl LocalCache {
         Ok(())
     }
 
-    pub fn get_frame_by_page(&self, page_no: u32, max_frame_no: u64) -> Result<Option<Vec<u8>>> {
+    pub fn get_frame_by_page(
+        &self,
+        page_no: u32,
+        max_frame_no: u64,
+    ) -> Result<Option<(u64, Option<Vec<u8>>)>> {
+        println!("query: {:?} {:?}", page_no, max_frame_no);
         let mut stmt = self.conn.prepare(
-            "SELECT data FROM frames WHERE page_no=?1 AND frame_no <= ?2
-            ORDER BY frame_no DESC LIMIT 1",
+            "SELECT frame_no, data FROM frames WHERE page_no = ?1 AND frame_no <= ?2
+        ORDER BY frame_no DESC LIMIT 1",
         )?;
-        match stmt.query_row(params![page_no, max_frame_no], |row| row.get(0)) {
-            Ok(frame_data) => Ok(Some(frame_data)),
+
+        match stmt.query_row(params![page_no, max_frame_no], |row| {
+            let frame_no: u64 = row.get(0)?;
+            let data: Result<Vec<u8>, Error> = row.get(1);
+            let data = match data {
+                Ok(data) => Some(data),
+                Err(Error::InvalidColumnType(_, _, types::Type::Null)) => None,
+                Err(e) => return Err(e),
+            };
+            Ok((frame_no, data))
+        }) {
+            Ok(result) => Ok(Some(result)),
             Err(Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
+            Err(e) => Err(e.into()),
         }
     }
 
