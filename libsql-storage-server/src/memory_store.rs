@@ -5,6 +5,7 @@ use crate::errors::Error;
 use crate::errors::Error::WriteConflict;
 use crate::store::FrameStore;
 use async_trait::async_trait;
+use bytes::Bytes;
 use libsql_storage::rpc::Frame;
 
 #[derive(Default)]
@@ -73,6 +74,15 @@ impl FrameStore for InMemFrameStore {
             .pages
             .get(&page_no)
             .map(|frames| *frames.last().unwrap())
+    }
+
+    async fn get_frame_by_page(
+        &self,
+        _namespace: &str,
+        _page_no: u32,
+        _max_frame_no: u64,
+    ) -> Option<(u64, Bytes)> {
+        todo!()
     }
 
     async fn frames_in_wal(&self, _namespace: &str) -> u64 {

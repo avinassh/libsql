@@ -90,6 +90,15 @@ impl FrameStore for RedisFrameStore {
         }
     }
 
+    async fn get_frame_by_page(
+        &self,
+        _namespace: &str,
+        _page_no: u32,
+        _max_frame_no: u64,
+    ) -> Option<(u64, Bytes)> {
+        todo!()
+    }
+
     async fn frames_in_wal(&self, namespace: &str) -> u64 {
         let max_frame_key = format!("{}/max_frame_no", namespace);
         let mut con = self.client.get_connection().unwrap();

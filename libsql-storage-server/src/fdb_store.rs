@@ -2,6 +2,7 @@ use crate::errors::Error;
 use crate::errors::Error::WriteConflict;
 use crate::store::FrameStore;
 use async_trait::async_trait;
+use bytes::Bytes;
 use foundationdb::api::NetworkAutoStop;
 use foundationdb::tuple::pack;
 use foundationdb::tuple::unpack;
@@ -137,6 +138,21 @@ impl FrameStore for FDBFrameStore {
             Some(unpacked.3)
         } else {
             None
+        }
+    }
+
+    async fn get_frame_by_page(
+        &self,
+        namespace: &str,
+        page_no: u32,
+        max_frame_no: u64,
+    ) -> Option<(u64, Bytes)> {
+        match self.find_frame(namespace, page_no, max_frame_no).await {
+            None => None,
+            Some(frame_no) => match self.read_frame(namespace, frame_no).await {
+                Some(frame) => Some((frame_no, frame)),
+                None => None,
+            },
         }
     }
 

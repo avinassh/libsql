@@ -43,6 +43,24 @@ pub struct FindFrameResponse {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetFrameByPageRequest {
+    #[prost(string, tag = "1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub page_no: u32,
+    #[prost(uint64, tag = "3")]
+    pub max_frame_no: u64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetFrameByPageResponse {
+    #[prost(uint64, optional, tag = "1")]
+    pub frame_no: ::core::option::Option<u64>,
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub frame: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadFrameRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
@@ -280,6 +298,31 @@ pub mod storage_client {
             req.extensions_mut().insert(GrpcMethod::new("storage.Storage", "ReadFrame"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn get_frame_by_page(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetFrameByPageRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetFrameByPageResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/storage.Storage/GetFrameByPage",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("storage.Storage", "GetFrameByPage"));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn db_size(
             &mut self,
             request: impl tonic::IntoRequest<super::DbSizeRequest>,
@@ -374,6 +417,13 @@ pub mod storage_server {
             request: tonic::Request<super::ReadFrameRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ReadFrameResponse>,
+            tonic::Status,
+        >;
+        async fn get_frame_by_page(
+            &self,
+            request: tonic::Request<super::GetFrameByPageRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetFrameByPageResponse>,
             tonic::Status,
         >;
         async fn db_size(
@@ -590,6 +640,52 @@ pub mod storage_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = ReadFrameSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/storage.Storage/GetFrameByPage" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFrameByPageSvc<T: Storage>(pub Arc<T>);
+                    impl<
+                        T: Storage,
+                    > tonic::server::UnaryService<super::GetFrameByPageRequest>
+                    for GetFrameByPageSvc<T> {
+                        type Response = super::GetFrameByPageResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFrameByPageRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Storage>::get_frame_by_page(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = GetFrameByPageSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

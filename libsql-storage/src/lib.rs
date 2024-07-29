@@ -174,6 +174,25 @@ impl DurableWal {
             .flatten();
         Ok(frame_no)
     }
+
+    #[tracing::instrument(skip(self))]
+    async fn get_frame_by_page_no(
+        &mut self,
+        page_no: std::num::NonZeroU32,
+    ) -> Result<Option<(std::num::NonZeroU64, Vec<u8>)>> {
+        trace!("DurableWal::get_frame_by_page_no()");
+        let req = rpc::GetFrameByPageRequest {
+            namespace: self.namespace.to_string(),
+            page_no: page_no.get(),
+            max_frame_no: self.max_frame_no,
+        };
+        let mut binding = self.client.clone();
+        let resp = binding.get_frame_by_page(req).await.unwrap().into_inner();
+        Ok(Some((
+            std::num::NonZeroU64::new(resp.frame_no.unwrap()).unwrap(),
+            resp.frame.unwrap(),
+        )))
+    }
 }
 
 impl Wal for DurableWal {

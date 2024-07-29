@@ -82,6 +82,31 @@ impl Storage for Service {
         }
     }
 
+    async fn get_frame_by_page(
+        &self,
+        request: Request<rpc::GetFrameByPageRequest>,
+    ) -> Result<Response<rpc::GetFrameByPageResponse>, Status> {
+        let request = request.into_inner();
+        let page_no = request.page_no;
+        let namespace = request.namespace;
+        trace!("get_frame_by_page(page_no={})", page_no);
+        if let Some((frame_no, data)) = self
+            .store
+            .get_frame_by_page(&namespace, page_no, request.max_frame_no)
+            .await
+        {
+            Ok(Response::new(rpc::GetFrameByPageResponse {
+                frame: Some(data.clone().into()),
+                frame_no: Some(frame_no),
+            }))
+        } else {
+            Ok(Response::new(rpc::GetFrameByPageResponse {
+                frame: None,
+                frame_no: None,
+            }))
+        }
+    }
+
     async fn db_size(
         &self,
         _request: Request<rpc::DbSizeRequest>,

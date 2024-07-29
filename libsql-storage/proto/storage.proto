@@ -28,6 +28,17 @@ message FindFrameResponse {
   optional uint64 frame_no = 1;
 }
 
+message GetFrameByPageRequest {
+  string namespace = 1;
+  uint32 page_no = 2;
+  uint64 max_frame_no = 3;
+}
+
+message GetFrameByPageResponse {
+  optional uint64 frame_no = 1;
+  optional bytes frame = 2;
+}
+
 message ReadFrameRequest {
   string namespace = 1;
   uint64 frame_no = 2;
@@ -73,6 +84,7 @@ service Storage {
   rpc InsertFrames(InsertFramesRequest) returns (InsertFramesResponse) {}
   rpc FindFrame(FindFrameRequest) returns (FindFrameResponse) {}
   rpc ReadFrame(ReadFrameRequest) returns (ReadFrameResponse) {}
+  rpc GetFrameByPage(GetFrameByPageRequest) returns (GetFrameByPageResponse) {}
   rpc DbSize(DbSizeRequest) returns (DbSizeResponse) {}
   rpc FramesInWAL(FramesInWALRequest) returns (FramesInWALResponse) {}
   rpc Destroy(DestroyRequest) returns (DestroyResponse) {}
