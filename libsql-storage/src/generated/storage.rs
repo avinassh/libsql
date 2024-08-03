@@ -114,6 +114,28 @@ pub struct ErrorDetails {
     #[prost(string, tag = "2")]
     pub message: ::prost::alloc::string::String,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StreamVersionMapRequest {
+    #[prost(string, tag = "1")]
+    pub namespace: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Version {
+    #[prost(uint64, tag = "1")]
+    pub frame_no: u64,
+    #[prost(uint32, tag = "2")]
+    pub page_no: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StreamVersionMapResponse {
+    #[prost(uint64, tag = "1")]
+    pub max_frame_no: u64,
+    #[prost(message, repeated, tag = "2")]
+    pub version: ::prost::alloc::vec::Vec<Version>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ErrorCode {
@@ -389,6 +411,31 @@ pub mod storage_client {
             req.extensions_mut().insert(GrpcMethod::new("storage.Storage", "Destroy"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn stream_version_map(
+            &mut self,
+            request: impl tonic::IntoRequest<super::StreamVersionMapRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::StreamVersionMapResponse>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/storage.Storage/StreamVersionMap",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("storage.Storage", "StreamVersionMap"));
+            self.inner.server_streaming(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -441,6 +488,22 @@ pub mod storage_server {
             &self,
             request: tonic::Request<super::DestroyRequest>,
         ) -> std::result::Result<tonic::Response<super::DestroyResponse>, tonic::Status>;
+        /// Server streaming response type for the StreamVersionMap method.
+        type StreamVersionMapStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<
+                    super::StreamVersionMapResponse,
+                    tonic::Status,
+                >,
+            >
+            + Send
+            + 'static;
+        async fn stream_version_map(
+            &self,
+            request: tonic::Request<super::StreamVersionMapRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamVersionMapStream>,
+            tonic::Status,
+        >;
     }
     #[derive(Debug)]
     pub struct StorageServer<T: Storage> {
@@ -831,6 +894,54 @@ pub mod storage_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/storage.Storage/StreamVersionMap" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamVersionMapSvc<T: Storage>(pub Arc<T>);
+                    impl<
+                        T: Storage,
+                    > tonic::server::ServerStreamingService<
+                        super::StreamVersionMapRequest,
+                    > for StreamVersionMapSvc<T> {
+                        type Response = super::StreamVersionMapResponse;
+                        type ResponseStream = T::StreamVersionMapStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StreamVersionMapRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Storage>::stream_version_map(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = StreamVersionMapSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

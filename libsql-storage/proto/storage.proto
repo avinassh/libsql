@@ -80,6 +80,20 @@ message ErrorDetails {
   string message = 2;
 }
 
+message StreamVersionMapRequest {
+  string namespace = 1;
+}
+
+message Version {
+  uint64 frame_no = 1;
+  uint32 page_no = 2;
+}
+
+message StreamVersionMapResponse {
+  uint64 max_frame_no = 1;
+  repeated Version version = 2;
+}
+
 service Storage {
   rpc InsertFrames(InsertFramesRequest) returns (InsertFramesResponse) {}
   rpc FindFrame(FindFrameRequest) returns (FindFrameResponse) {}
@@ -88,4 +102,5 @@ service Storage {
   rpc DbSize(DbSizeRequest) returns (DbSizeResponse) {}
   rpc FramesInWAL(FramesInWALRequest) returns (FramesInWALResponse) {}
   rpc Destroy(DestroyRequest) returns (DestroyResponse) {}
+  rpc StreamVersionMap(StreamVersionMapRequest) returns (stream StreamVersionMapResponse) {}
 }

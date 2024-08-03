@@ -6,8 +6,11 @@ use bytes::Bytes;
 use foundationdb::api::NetworkAutoStop;
 use foundationdb::tuple::pack;
 use foundationdb::tuple::unpack;
-use foundationdb::{KeySelector, Transaction};
+use foundationdb::{KeySelector, RangeOption, Transaction};
+use futures::pin_mut;
+use futures::stream::{self, Stream, StreamExt};
 use libsql_storage::rpc::Frame;
+use tokio::sync::mpsc;
 use tracing::error;
 
 pub struct FDBFrameStore {
@@ -72,6 +75,48 @@ impl FDBFrameStore {
         txn.set(&frame_data_key, &frame_data);
         txn.set(&page_key, &pack(&frame.frame_no));
         txn.set(&page_frame_idx, &pack(&""));
+    }
+
+    #[tracing::instrument()]
+    async fn stream_version_map(
+        namespace: &str,
+        start_page: u32,
+    ) -> impl Stream<Item = Vec<(u32, u64)>> {
+        let batch_size = 1_000;
+        stream::unfold(
+            (namespace.to_string(), start_page),
+            move |(namespace, current_page)| async move {
+                let db = foundationdb::Database::default().unwrap();
+                let start_key = page_key(&namespace.clone(), current_page);
+                let end_key = page_key(&namespace.clone(), current_page + batch_size);
+                let range = RangeOption::from((
+                    KeySelector::first_greater_or_equal(&start_key),
+                    KeySelector::first_greater_than(&end_key),
+                ));
+                let transaction = db.create_trx().expect("Failed to create transaction");
+                let mut iter = transaction.get_ranges_keyvalues(range.clone(), false);
+                let mut items = Vec::new();
+                while let Some(key_values) = iter.next().await {
+                    for kv in key_values {
+                        let key = kv.key();
+                        let value = kv.value();
+                        let unpacked: (String, String, u32) =
+                            unpack(&key.to_vec()).expect("failed to decode");
+                        if unpacked.0 != namespace {
+                            break;
+                        }
+                        let page_no = unpacked.2;
+                        let frame_no: u64 = unpack(&value).expect("failed to decode u64");
+                        items.push((page_no, frame_no))
+                    }
+                }
+                if items.is_empty() {
+                    None
+                } else {
+                    Some((items, (namespace, current_page + batch_size)))
+                }
+            },
+        )
     }
 }
 
@@ -163,4 +208,26 @@ impl FrameStore for FDBFrameStore {
     }
 
     async fn destroy(&self, _namespace: &str) {}
+
+    #[tracing::instrument(skip(self))]
+    async fn streaming_query(
+        &self,
+        namespace: &str,
+        start_page: u32,
+    ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>> {
+        tracing::trace!("streaming_query");
+        let (tx, rx) = mpsc::channel(10);
+        let namespace = namespace.to_string();
+        tokio::spawn(async move {
+            let stream = FDBFrameStore::stream_version_map(&namespace, start_page).await;
+            pin_mut!(stream);
+            while let Some(items) = stream.next().await {
+                if tx.send(Some(items)).await.is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(None).await;
+        });
+        rx
+    }
 }

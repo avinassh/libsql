@@ -1,6 +1,7 @@
 use crate::errors::Error;
 use async_trait::async_trait;
 use libsql_storage::rpc::Frame;
+use tokio::sync::mpsc;
 
 #[async_trait]
 pub trait FrameStore: Send + Sync {
@@ -20,4 +21,9 @@ pub trait FrameStore: Send + Sync {
     ) -> Option<(u64, bytes::Bytes)>;
     async fn frames_in_wal(&self, namespace: &str) -> u64;
     async fn destroy(&self, namespace: &str);
+    async fn streaming_query(
+        &self,
+        namespace: &str,
+        start_page: u32,
+    ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>>;
 }

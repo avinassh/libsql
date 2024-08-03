@@ -1,9 +1,11 @@
-use std::sync::atomic::AtomicU32;
-
 use crate::memory_store::InMemFrameStore;
 use crate::store::FrameStore;
+use futures::stream;
 use libsql_storage::rpc;
 use libsql_storage::rpc::storage_server::Storage;
+use std::pin::Pin;
+use std::sync::atomic::AtomicU32;
+use tonic::codegen::tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{error, trace};
 
@@ -133,5 +135,41 @@ impl Storage for Service {
         let namespace = request.into_inner().namespace;
         self.store.destroy(&namespace).await;
         Ok(Response::new(rpc::DestroyResponse {}))
+    }
+
+    type StreamVersionMapStream =
+        Pin<Box<dyn Stream<Item = Result<rpc::StreamVersionMapResponse, Status>> + Send>>;
+
+    async fn stream_version_map(
+        &self,
+        request: Request<rpc::StreamVersionMapRequest>,
+    ) -> Result<Response<Self::StreamVersionMapStream>, Status> {
+        let namespace = request.into_inner().namespace;
+        trace!("stream_version_map(namespace={})", namespace);
+        let receiver = self.store.streaming_query(&namespace, 0).await;
+        let max_frame_no = self.store.frames_in_wal(&namespace).await;
+        let stream = stream::unfold(
+            (receiver, max_frame_no),
+            |(mut rx, max_frame_no)| async move {
+                match rx.recv().await {
+                    Some(Some(vec)) => {
+                        let versions: Vec<rpc::Version> = vec
+                            .into_iter()
+                            .map(|(page_no, frame_no)| rpc::Version { frame_no, page_no })
+                            .collect();
+                        let response = rpc::StreamVersionMapResponse {
+                            max_frame_no,
+                            version: versions,
+                        };
+                        Some((Ok(response), (rx, max_frame_no)))
+                    }
+                    Some(None) | None => None,
+                }
+            },
+        );
+
+        Ok(Response::new(
+            Box::pin(stream) as Self::StreamVersionMapStream
+        ))
     }
 }

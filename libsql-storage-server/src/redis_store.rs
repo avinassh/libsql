@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use libsql_storage::rpc::Frame;
 use redis::{Client, Commands, RedisResult};
+use tokio::sync::mpsc;
 use tracing::error;
 
 pub struct RedisFrameStore {
@@ -116,6 +117,14 @@ impl FrameStore for RedisFrameStore {
         let mut con = self.client.get_connection().unwrap();
         // send a FLUSHALL request
         let _: () = redis::cmd("FLUSHALL").query(&mut con).unwrap();
+    }
+
+    async fn streaming_query(
+        &self,
+        _namespace: &str,
+        _start_page: u32,
+    ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>> {
+        todo!()
     }
 }
 

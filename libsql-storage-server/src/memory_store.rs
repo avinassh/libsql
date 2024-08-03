@@ -7,6 +7,7 @@ use crate::store::FrameStore;
 use async_trait::async_trait;
 use bytes::Bytes;
 use libsql_storage::rpc::Frame;
+use tokio::sync::mpsc;
 
 #[derive(Default)]
 pub(crate) struct InMemFrameStore {
@@ -94,5 +95,13 @@ impl FrameStore for InMemFrameStore {
         inner.frames.clear();
         inner.pages.clear();
         inner.max_frame_no = 0;
+    }
+
+    async fn streaming_query(
+        &self,
+        _namespace: &str,
+        _start_page: u32,
+    ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>> {
+        todo!()
     }
 }
