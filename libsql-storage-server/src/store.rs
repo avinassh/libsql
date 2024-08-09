@@ -24,6 +24,6 @@ pub trait FrameStore: Send + Sync {
     async fn streaming_query(
         &self,
         namespace: &str,
-        start_page: u32,
+        start_frame: u64,
     ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>>;
 }

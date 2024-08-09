@@ -82,6 +82,7 @@ message ErrorDetails {
 
 message StreamVersionMapRequest {
   string namespace = 1;
+  uint64 frame_no = 2;
 }
 
 message Version {

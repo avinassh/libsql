@@ -121,8 +121,8 @@ impl FrameStore for RedisFrameStore {
 
     async fn streaming_query(
         &self,
-        _namespace: &str,
-        _start_page: u32,
+        namespace: &str,
+        start_frame: u64,
     ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>> {
         todo!()
     }

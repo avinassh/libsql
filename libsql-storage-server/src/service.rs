@@ -1,3 +1,4 @@
+use crate::errors::Error::WriteConflict;
 use crate::memory_store::InMemFrameStore;
 use crate::store::FrameStore;
 use futures::stream;
@@ -144,10 +145,19 @@ impl Storage for Service {
         &self,
         request: Request<rpc::StreamVersionMapRequest>,
     ) -> Result<Response<Self::StreamVersionMapStream>, Status> {
-        let namespace = request.into_inner().namespace;
+        let max_batch = 10_000;
+        let request = request.into_inner();
+        let namespace = request.namespace;
         trace!("stream_version_map(namespace={})", namespace);
-        let receiver = self.store.streaming_query(&namespace, 0).await;
         let max_frame_no = self.store.frames_in_wal(&namespace).await;
+        if request.frame_no > 0 && request.frame_no + max_batch < max_frame_no {
+            return Err(WriteConflict.into());
+        }
+
+        let receiver = self
+            .store
+            .streaming_query(&namespace, request.frame_no)
+            .await;
         let stream = stream::unfold(
             (receiver, max_frame_no),
             |(mut rx, max_frame_no)| async move {

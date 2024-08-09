@@ -119,6 +119,8 @@ pub struct ErrorDetails {
 pub struct StreamVersionMapRequest {
     #[prost(string, tag = "1")]
     pub namespace: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub frame_no: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

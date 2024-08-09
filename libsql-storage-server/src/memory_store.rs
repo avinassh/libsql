@@ -99,8 +99,8 @@ impl FrameStore for InMemFrameStore {
 
     async fn streaming_query(
         &self,
-        _namespace: &str,
-        _start_page: u32,
+        namespace: &str,
+        start_frame: u64,
     ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>> {
         todo!()
     }

@@ -10,6 +10,8 @@ use foundationdb::{KeySelector, RangeOption, Transaction};
 use futures::pin_mut;
 use futures::stream::{self, Stream, StreamExt};
 use libsql_storage::rpc::Frame;
+use std::collections::BTreeMap;
+use std::pin::Pin;
 use tokio::sync::mpsc;
 use tracing::error;
 
@@ -20,6 +22,7 @@ pub struct FDBFrameStore {
 // Some information about how we map keys on Foundation DB.
 //
 // key: (<ns>, "f", <frame_no>)                     value: (page_no, bytes (i.e. frame data)) tuple
+// key: (<ns>, "fp", <frame_no>)                    value: u32 (page_no)
 // key: (<ns>, "p", <page_no>)                      value: u64 (stores latest frame no of a page)
 // key: (<ns>, "pf", <page_no>, <frame_no>)         value: "" (empty string, this is used to keep track of page versions)
 // key: (<ns>, "max_frame_no")                      value: u64 (current max frame no of this ns)
@@ -37,6 +40,11 @@ fn page_key(namespace: &str, page_no: u32) -> Vec<u8> {
 #[inline]
 fn page_index_key(namespace: &str, page_no: u32, frame_no: u64) -> Vec<u8> {
     pack(&(namespace, "pf", page_no, frame_no))
+}
+
+#[inline]
+fn frame_index_key(namespace: &str, frame_no: u64) -> Vec<u8> {
+    pack(&(namespace, "fp", frame_no))
 }
 
 #[inline]
@@ -71,20 +79,62 @@ impl FDBFrameStore {
         let frame_data = pack(&(frame.page_no, frame.data));
         let page_key = page_key(namespace, frame.page_no);
         let page_frame_idx = page_index_key(namespace, frame.page_no, frame.frame_no);
+        let frame_idx = frame_index_key(namespace, frame.frame_no);
 
         txn.set(&frame_data_key, &frame_data);
         txn.set(&page_key, &pack(&frame.frame_no));
         txn.set(&page_frame_idx, &pack(&""));
+        txn.set(&frame_idx, &pack(&frame.page_no));
     }
 
-    #[tracing::instrument()]
+    async fn stream_version_map_by_frames(
+        namespace: &str,
+        start_frame: u64,
+    ) -> Pin<Box<dyn Stream<Item = Vec<(u32, u64)>> + Send>> {
+        let batch_size = 1_000;
+        Box::pin(stream::unfold(
+            (namespace.to_string(), start_frame),
+            move |(namespace, current_frame)| async move {
+                let db = foundationdb::Database::default().unwrap();
+                let start_key = frame_index_key(&namespace.clone(), current_frame);
+                let end_key = frame_index_key(&namespace.clone(), current_frame + batch_size);
+                let range = RangeOption::from((
+                    KeySelector::first_greater_or_equal(&start_key),
+                    KeySelector::first_greater_than(&end_key),
+                ));
+                let transaction = db.create_trx().expect("Failed to create transaction");
+                let mut iter = transaction.get_ranges_keyvalues(range.clone(), false);
+                let mut items = BTreeMap::new();
+                while let Some(key_values) = iter.next().await {
+                    for kv in key_values {
+                        let key = kv.key();
+                        let value = kv.value();
+                        let unpacked: (String, String, u64) =
+                            unpack(&key.to_vec()).expect("failed to decode");
+                        if unpacked.0 != namespace {
+                            break;
+                        }
+                        let frame_no = unpacked.2;
+                        let page_no: u32 = unpack(&value).expect("failed to decode u64");
+                        items.insert(page_no, frame_no);
+                    }
+                }
+                if items.is_empty() {
+                    None
+                } else {
+                    let items = items.into_iter().collect();
+                    Some((items, (namespace, current_frame + batch_size)))
+                }
+            },
+        ))
+    }
+
     async fn stream_version_map(
         namespace: &str,
-        start_page: u32,
-    ) -> impl Stream<Item = Vec<(u32, u64)>> {
+    ) -> Pin<Box<dyn Stream<Item = Vec<(u32, u64)>> + Send>> {
         let batch_size = 1_000;
-        stream::unfold(
-            (namespace.to_string(), start_page),
+        Box::pin(stream::unfold(
+            (namespace.to_string(), 0),
             move |(namespace, current_page)| async move {
                 let db = foundationdb::Database::default().unwrap();
                 let start_key = page_key(&namespace.clone(), current_page);
@@ -116,7 +166,7 @@ impl FDBFrameStore {
                     Some((items, (namespace, current_page + batch_size)))
                 }
             },
-        )
+        ))
     }
 }
 
@@ -213,13 +263,18 @@ impl FrameStore for FDBFrameStore {
     async fn streaming_query(
         &self,
         namespace: &str,
-        start_page: u32,
+        start_frame: u64,
     ) -> mpsc::Receiver<Option<Vec<(u32, u64)>>> {
-        tracing::trace!("streaming_query");
         let (tx, rx) = mpsc::channel(10);
         let namespace = namespace.to_string();
         tokio::spawn(async move {
-            let stream = FDBFrameStore::stream_version_map(&namespace, start_page).await;
+            let stream = if start_frame > 0 {
+                tracing::trace!("streaming_query by frames");
+                FDBFrameStore::stream_version_map_by_frames(&namespace, start_frame).await
+            } else {
+                tracing::trace!("streaming_query by pages");
+                FDBFrameStore::stream_version_map(&namespace).await
+            };
             pin_mut!(stream);
             while let Some(items) = stream.next().await {
                 if tx.send(Some(items)).await.is_err() {

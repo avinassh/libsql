@@ -13,6 +13,7 @@ use libsql_sys::rusqlite;
 use libsql_sys::wal::{Result, Vfs, Wal, WalManager};
 use prost::Message;
 use rpc::storage_client::StorageClient;
+use tonic::codegen::tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tracing::{error, trace, warn};
 
@@ -193,6 +194,37 @@ impl DurableWal {
             resp.frame.unwrap(),
         )))
     }
+
+    #[tracing::instrument(skip(self))]
+    async fn stream_version_map(&mut self) {
+        let request = rpc::StreamVersionMapRequest {
+            namespace: self.namespace.to_string(),
+            frame_no: 1,
+        };
+        let mut response_stream = self
+            .client
+            .stream_version_map(request)
+            .await
+            .unwrap()
+            .into_inner();
+        while let Some(response) = response_stream.next().await {
+            match response {
+                Ok(stream_response) => {
+                    println!("Received max_frame_no: {}", stream_response.max_frame_no);
+                    for version in stream_response.version {
+                        println!(
+                            "Page No: {}, Frame No: {}",
+                            version.page_no, version.frame_no
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error received: {}", e);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 impl Wal for DurableWal {
@@ -359,6 +391,7 @@ impl Wal for DurableWal {
     ) -> Result<usize> {
         trace!("DurableWal::insert_frames()");
         let rt = tokio::runtime::Handle::current();
+        let _ = tokio::task::block_in_place(|| rt.block_on(self.stream_version_map()));
         let mut lock_manager = self.lock_manager.lock().unwrap();
         if !lock_manager.is_lock_owner(self.namespace.to_string(), self.conn_id.clone()) {
             error!("DurableWal::insert_frames() was called without acquiring lock!",);
